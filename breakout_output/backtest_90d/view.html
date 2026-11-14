@@ -1,0 +1,1965 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>幣安永續「結構雙引擎二拍突破（去過擬合・零前視偏差版）」90天實盤級回測報告 (15m)</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 24px; }
+  .container { max-width: 1440px; margin: 0 auto; }
+  h1 { font-size: 25px; margin-bottom: 6px; color: #f8fafc; }
+  .sub { color: #94a3b8; font-size: 13.5px; line-height: 1.6; margin-bottom: 22px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 14px; margin-bottom: 24px; }
+  .kpi { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 16px; }
+  .kpi .label { font-size: 13px; color: #94a3b8; }
+  .kpi .val { font-size: 24px; font-weight: 800; margin-top: 6px; color: #38bdf8; }
+  .kpi .val.green { color: #4ade80; }
+  .kpi .val.amber { color: #fbbf24; }
+  .eq-box { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 16px; margin-bottom: 28px; text-align: center; }
+  .eq-box img { max-width: 100%; border-radius: 8px; }
+  h2 { font-size: 19px; margin: 28px 0 14px; color: #f1f5f9; border-left: 4px solid #38bdf8; padding-left: 10px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(560px, 1fr)); gap: 18px; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 14px; }
+  .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .sym { font-size: 18px; font-weight: 800; color: #f8fafc; margin-right: 8px; }
+  .tag { background: #334155; color: #e2e8f0; padding: 3px 8px; border-radius: 6px; font-size: 12px; margin-right: 8px; font-weight: 600; }
+  .time { color: #94a3b8; font-size: 13px; }
+  .pnl-badge { color: #fff; font-weight: 800; padding: 4px 10px; border-radius: 8px; font-size: 13.5px; }
+  .card-meta { font-size: 13px; color: #cbd5e1; margin-bottom: 4px; }
+  .card-note { font-size: 12.5px; color: #94a3b8; margin-bottom: 10px; }
+  .card img { width: 100%; border-radius: 8px; border: 1px solid #334155; }
+  table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 10px; overflow: hidden; font-size: 13.5px; margin-bottom: 24px; }
+  th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #334155; }
+  th { background: #0f172a; color: #94a3b8; font-weight: 600; }
+  .pos { color: #4ade80; }
+  .neg { color: #f87171; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🛡️ 幣安永續合約「結構雙引擎二拍突破（去過擬合・零前視偏差修正版）」過去 90 天回測報告</h1>
+  <div class="sub">
+    K線週期：<b>15m（僅已收盤K線）</b> ｜ 掃描標的池：<b>174 檔 USDT 永續合約（訊號當下強制要求前 24h 成交額 &ge; $5M，絕不硬塞事後妖幣）</b><br/>
+    嚴格實盤假設：<b>已扣 0.24% 來回手續費與滑價 ＋ 持倉每 8h 資金費率 0.01% ＋ 止損開盤跳空滑價 ＋ 收盤站上 +1.5R 次根才移保本（杜絕同根幽靈保本）</b>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="label">初始本金 / 單筆風險預算</div><div class="val">$1,000 (1.5%R)</div></div>
+    <div class="kpi"><div class="label">1.5%R 分倉最終權益</div><div class="val green">$1,307.07 (+30.7%)</div></div>
+    <div class="kpi"><div class="label">1.5%R 分倉最大回撤</div><div class="val amber">-22.4%</div></div>
+    <div class="kpi"><div class="label">對照：全倉 3x 滾倉結局</div><div class="val " style="color:#f87171">$377 (-62.3%)</div></div>
+    <div class="kpi"><div class="label">總訊號勝率 (94 筆)</div><div class="val">43.6%</div></div>
+    <div class="kpi"><div class="label">總獲利因子 PF (扣前2極端值)</div><div class="val amber">1.88 (1.45)</div></div>
+    <div class="kpi"><div class="label">累計手續費滑價 / 資費拖累</div><div class="val" style="color:#f87171">-4.3% / -0.70%</div></div>
+  </div>
+
+  <h2>⚡ 雙引擎結構分項表現（0% 訊號重疊・全整數結構門檻・無小數點湊參數）</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>子引擎名稱</th><th>核心結構條件與統一出場規則</th><th>訊號數</th><th>勝率</th><th>1x 累計淨利</th><th>累積盈虧比 (R)</th><th>PF (去極端值PF)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>★ 引擎 A（水上高台黏帶二拍）</b></td>
+        <td>MA200上揚且穩守&ge;80根 + 7線黏帶&le;2% + 箱體&le;5% + 首拍2~8x破箱頂 + 二拍放量確認 → 沿 MA99 移動停利</td>
+        <td><b>79 筆</b> (32勝)</td>
+        <td><b>40.5%</b></td>
+        <td class="pos"><b>+148.8%</b></td>
+        <td class="pos"><b>+27.8R</b></td>
+        <td><b>1.60 (1.23)</b></td>
+      </tr>
+      <tr>
+        <td><b>🐂 引擎 B（水下築底穿MA200二拍）</b></td>
+        <td>MA200水下築底&ge;80根 + 7線黏帶&le;2% + 首拍2~8x穿MA200 + 二拍穩守MA200放量確認 → 沿 MA99 移動停利</td>
+        <td><b>15 筆</b> (9勝)</td>
+        <td><b>60.0%</b></td>
+        <td class="pos"><b>+70.1%</b></td>
+        <td class="pos"><b>+19.0R</b></td>
+        <td><b>3.94 (1.02)</b></td>
+      </tr>
+      <tr style="background:#0f172a;">
+        <td><b>🛡️ 雙引擎合體總計（A/B 各最多 2 倉）</b></td>
+        <td>實際執行 54 筆 / 滿倉風控略過 40 筆（對照全倉 3x 滾倉最大回撤高達 -79.2%）</td>
+        <td><b>94 筆</b> (41勝)</td>
+        <td><b>43.6%</b></td>
+        <td class="pos"><b>+218.9%</b></td>
+        <td class="pos"><b>+46.7R</b></td>
+        <td><b>1.88 (1.45)</b></td>
+      </tr>
+    </tbody>
+  </table>
+
+  
+
+  <div class="eq-box">
+    <img src="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/equity_curve.png" alt="Equity Curve"/>
+  </div>
+
+  <h2>📈 代表性獲利交易復盤圖卡（前 8 筆）</h2>
+  <div class="grid">
+    
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">SUIUSDT</span>
+                  <span class="tag" style="background:#6a1b9a;color:#fff;">🐂 引擎B·水下穿MA200二拍</span>
+                  <span class="time">2026-08-19 22:45 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x淨利: +35.0% (+14.13R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.6704</b> ｜ 止損: <b>0.6538</b> (風險 2.5%) ｜
+                出場: <b>0.9071</b> (60h到期平倉) ｜ <b>實執倉位 0.61x: 帳戶 +21.20% → 權益 $1,290</b>
+              </div>
+              <div class="card-note">水下築底(167根) + 7線黏帶(0.50%) → 第一拍 2.9x 穿MA200 + 第二拍(+1.4%, 量6.6x, 24h額$102.7M)確認</div>
+              <a href="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/SUIUSDT_20260819_2245.png" target="_blank">
+                <img src="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/SUIUSDT_20260819_2245.png" loading="lazy" alt="SUIUSDT"/>
+              </a>
+            </div>
+        
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">ARUSDT</span>
+                  <span class="tag" style="background:#0277bd;color:#fff;">★ 引擎A·水上高台黏帶二拍</span>
+                  <span class="time">2026-09-18 10:00 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x淨利: +52.2% (+8.63R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>2.742</b> ｜ 止損: <b>2.5761</b> (風險 6.1%) ｜
+                出場: <b>4.181</b> (破MA99趨勢止盈) ｜ <b>實執倉位 0.25x: 帳戶 +12.94% → 權益 $1,576</b>
+              </div>
+              <div class="card-note">水上高台(&gt;=80根守MA200) + 7線黏帶(1.91%) + 箱體(2.7%) → 第一拍 7.1x 破箱頂 + 第二拍(+1.1%, 量2.6x, 24h額$5.3M)確認</div>
+              <a href="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/ARUSDT_20260918_1000.png" target="_blank">
+                <img src="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/ARUSDT_20260918_1000.png" loading="lazy" alt="ARUSDT"/>
+              </a>
+            </div>
+        
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">PENGUUSDT</span>
+                  <span class="tag" style="background:#0277bd;color:#fff;">★ 引擎A·水上高台黏帶二拍</span>
+                  <span class="time">2026-08-19 23:15 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x淨利: +44.4% (+8.62R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.006421</b> ｜ 止損: <b>0.00609005</b> (風險 5.2%) ｜
+                出場: <b>0.009295</b> (60h到期平倉) ｜ <b>滿倉風控跳過</b>
+              </div>
+              <div class="card-note">水上高台(&gt;=80根守MA200) + 7線黏帶(1.87%) + 箱體(1.4%) → 第一拍 2.8x 破箱頂 + 第二拍(+2.3%, 量8.6x, 24h額$24.4M)確認</div>
+              <a href="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/PENGUUSDT_20260819_2315.png" target="_blank">
+                <img src="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/PENGUUSDT_20260819_2315.png" loading="lazy" alt="PENGUUSDT"/>
+              </a>
+            </div>
+        
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">AVAXUSDT</span>
+                  <span class="tag" style="background:#0277bd;color:#fff;">★ 引擎A·水上高台黏帶二拍</span>
+                  <span class="time">2026-09-18 11:30 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x淨利: +41.2% (+7.99R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>7.94</b> ｜ 止損: <b>7.52991</b> (風險 5.2%) ｜
+                出場: <b>11.24</b> (60h到期平倉) ｜ <b>滿倉風控跳過</b>
+              </div>
+              <div class="card-note">水上高台(&gt;=80根守MA200) + 7線黏帶(1.02%) + 箱體(2.7%) → 第一拍 2.4x 破箱頂 + 第二拍(+1.3%, 量3.6x, 24h額$86.2M)確認</div>
+              <a href="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/AVAXUSDT_20260918_1130.png" target="_blank">
+                <img src="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/AVAXUSDT_20260918_1130.png" loading="lazy" alt="AVAXUSDT"/>
+              </a>
+            </div>
+        
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">PEOPLEUSDT</span>
+                  <span class="tag" style="background:#0277bd;color:#fff;">★ 引擎A·水上高台黏帶二拍</span>
+                  <span class="time">2026-08-20 00:45 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x淨利: +37.1% (+5.92R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.008029</b> ｜ 止損: <b>0.00752492</b> (風險 6.3%) ｜
+                出場: <b>0.011036</b> (破MA99趨勢止盈) ｜ <b>滿倉風控跳過</b>
+              </div>
+              <div class="card-note">水上高台(&gt;=80根守MA200) + 7線黏帶(1.18%) + 箱體(3.8%) → 第一拍 3.7x 破箱頂 + 第二拍(+1.2%, 量2.8x, 24h額$6.3M)確認</div>
+              <a href="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/PEOPLEUSDT_20260820_0045.png" target="_blank">
+                <img src="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/PEOPLEUSDT_20260820_0045.png" loading="lazy" alt="PEOPLEUSDT"/>
+              </a>
+            </div>
+        
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">MONUSDT</span>
+                  <span class="tag" style="background:#0277bd;color:#fff;">★ 引擎A·水上高台黏帶二拍</span>
+                  <span class="time">2026-08-19 10:15 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x淨利: +24.8% (+5.22R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.02194</b> ｜ 止損: <b>0.0208981</b> (風險 4.7%) ｜
+                出場: <b>0.02745</b> (60h到期平倉) ｜ <b>實執倉位 0.32x: 帳戶 +7.83% → 權益 $1,078</b>
+              </div>
+              <div class="card-note">水上高台(&gt;=80根守MA200) + 7線黏帶(0.33%) + 箱體(2.1%) → 第一拍 3.5x 破箱頂 + 第二拍(+1.4%, 量8.6x, 24h額$5.8M)確認</div>
+              <a href="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/MONUSDT_20260819_1015.png" target="_blank">
+                <img src="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/MONUSDT_20260819_1015.png" loading="lazy" alt="MONUSDT"/>
+              </a>
+            </div>
+        
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">FILUSDT</span>
+                  <span class="tag" style="background:#6a1b9a;color:#fff;">🐂 引擎B·水下穿MA200二拍</span>
+                  <span class="time">2026-08-19 23:15 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x淨利: +26.1% (+4.72R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.6684</b> ｜ 止損: <b>0.631412</b> (風險 5.5%) ｜
+                出場: <b>0.8452</b> (60h到期平倉) ｜ <b>實執倉位 0.27x: 帳戶 +7.08% → 權益 $1,415</b>
+              </div>
+              <div class="card-note">水下築底(168根) + 7線黏帶(0.97%) → 第一拍 3.4x 穿MA200 + 第二拍(+3.4%, 量12.4x, 24h額$42.0M)確認</div>
+              <a href="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/FILUSDT_20260819_2315.png" target="_blank">
+                <img src="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/FILUSDT_20260819_2315.png" loading="lazy" alt="FILUSDT"/>
+              </a>
+            </div>
+        
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">1000PEPEUSDT</span>
+                  <span class="tag" style="background:#0277bd;color:#fff;">★ 引擎A·水上高台黏帶二拍</span>
+                  <span class="time">2026-09-20 00:45 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x淨利: +23.6% (+3.64R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.0040522</b> ｜ 止損: <b>0.00378941</b> (風險 6.5%) ｜
+                出場: <b>0.0050217</b> (60h到期平倉) ｜ <b>滿倉風控跳過</b>
+              </div>
+              <div class="card-note">水上高台(&gt;=80根守MA200) + 7線黏帶(0.77%) + 箱體(1.7%) → 第一拍 4.2x 破箱頂 + 第二拍(+1.5%, 量2.5x, 24h額$246.3M)確認</div>
+              <a href="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/1000PEPEUSDT_20260920_0045.png" target="_blank">
+                <img src="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/1000PEPEUSDT_20260920_0045.png" loading="lazy" alt="1000PEPEUSDT"/>
+              </a>
+            </div>
+        
+  </div>
+
+  <h2>📉 代表性虧損交易復盤圖卡（前 8 筆）</h2>
+  <div class="grid">
+    
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">HYPEUSDT</span>
+                  <span class="tag" style="background:#6a1b9a;color:#fff;">🐂 引擎B·水下穿MA200二拍</span>
+                  <span class="time">2026-10-10 22:15 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#ff5252">
+                  1x淨利: -3.2% (-1.10R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>86.719</b> ｜ 止損: <b>84.22</b> (風險 2.9%) ｜
+                出場: <b>84.22</b> (初始止損) ｜ <b>實執倉位 0.52x: 帳戶 -1.66% → 權益 $1,510</b>
+              </div>
+              <div class="card-note">水下築底(200根) + 7線黏帶(0.58%) → 第一拍 3.1x 穿MA200 + 第二拍(+1.7%, 量15.9x, 24h額$291.5M)確認</div>
+              <a href="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/HYPEUSDT_20261010_2215.png" target="_blank">
+                <img src="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/HYPEUSDT_20261010_2215.png" loading="lazy" alt="HYPEUSDT"/>
+              </a>
+            </div>
+        
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">CAKEUSDT</span>
+                  <span class="tag" style="background:#6a1b9a;color:#fff;">🐂 引擎B·水下穿MA200二拍</span>
+                  <span class="time">2026-10-17 22:00 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#ff5252">
+                  1x淨利: -3.1% (-1.09R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>2.2346</b> ｜ 止損: <b>2.172</b> (風險 2.8%) ｜
+                出場: <b>2.172</b> (初始止損) ｜ <b>實執倉位 0.54x: 帳戶 -1.63% → 權益 $1,462</b>
+              </div>
+              <div class="card-note">水下築底(101根) + 7線黏帶(0.28%) → 第一拍 5.8x 穿MA200 + 第二拍(+1.8%, 量24.0x, 24h額$6.9M)確認</div>
+              <a href="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/CAKEUSDT_20261017_2200.png" target="_blank">
+                <img src="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/CAKEUSDT_20261017_2200.png" loading="lazy" alt="CAKEUSDT"/>
+              </a>
+            </div>
+        
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">1000PEPEUSDT</span>
+                  <span class="tag" style="background:#6a1b9a;color:#fff;">🐂 引擎B·水下穿MA200二拍</span>
+                  <span class="time">2026-11-03 20:45 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#ff5252">
+                  1x淨利: -3.5% (-1.08R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.0048949</b> ｜ 止損: <b>0.00473669</b> (風險 3.2%) ｜
+                出場: <b>0.00473669</b> (初始止損) ｜ <b>實執倉位 0.46x: 帳戶 -1.62% → 權益 $1,327</b>
+              </div>
+              <div class="card-note">水下築底(139根) + 7線黏帶(0.91%) → 第一拍 2.8x 穿MA200 + 第二拍(+1.1%, 量2.7x, 24h額$306.1M)確認</div>
+              <a href="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/1000PEPEUSDT_20261103_2045.png" target="_blank">
+                <img src="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/1000PEPEUSDT_20261103_2045.png" loading="lazy" alt="1000PEPEUSDT"/>
+              </a>
+            </div>
+        
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">CAKEUSDT</span>
+                  <span class="tag" style="background:#0277bd;color:#fff;">★ 引擎A·水上高台黏帶二拍</span>
+                  <span class="time">2026-09-01 15:45 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#ff5252">
+                  1x淨利: -3.7% (-1.07R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>1.9015</b> ｜ 止損: <b>1.83652</b> (風險 3.4%) ｜
+                出場: <b>1.83652</b> (初始止損) ｜ <b>實執倉位 0.44x: 帳戶 -1.61% → 權益 $1,355</b>
+              </div>
+              <div class="card-note">水上高台(&gt;=80根守MA200) + 7線黏帶(0.69%) + 箱體(2.0%) → 第一拍 2.3x 破箱頂 + 第二拍(+1.3%, 量5.3x, 24h額$13.2M)確認</div>
+              <a href="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/CAKEUSDT_20260901_1545.png" target="_blank">
+                <img src="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/CAKEUSDT_20260901_1545.png" loading="lazy" alt="CAKEUSDT"/>
+              </a>
+            </div>
+        
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">HYPEUSDT</span>
+                  <span class="tag" style="background:#6a1b9a;color:#fff;">🐂 引擎B·水下穿MA200二拍</span>
+                  <span class="time">2026-11-03 22:30 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#ff5252">
+                  1x淨利: -3.9% (-1.07R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>87.278</b> ｜ 止損: <b>84.0554</b> (風險 3.7%) ｜
+                出場: <b>84.0554</b> (初始止損) ｜ <b>實執倉位 0.41x: 帳戶 -1.60% → 權益 $1,350</b>
+              </div>
+              <div class="card-note">水下築底(128根) + 7線黏帶(0.79%) → 第一拍 5.7x 穿MA200 + 第二拍(+1.5%, 量2.8x, 24h額$823.9M)確認</div>
+              <a href="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/HYPEUSDT_20261103_2230.png" target="_blank">
+                <img src="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/HYPEUSDT_20261103_2230.png" loading="lazy" alt="HYPEUSDT"/>
+              </a>
+            </div>
+        
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">1000PEPEUSDT</span>
+                  <span class="tag" style="background:#0277bd;color:#fff;">★ 引擎A·水上高台黏帶二拍</span>
+                  <span class="time">2026-11-10 12:15 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#ff5252">
+                  1x淨利: -4.3% (-1.07R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.0052944</b> ｜ 止損: <b>0.00508072</b> (風險 4.0%) ｜
+                出場: <b>0.00508072</b> (初始止損) ｜ <b>實執倉位 0.37x: 帳戶 -1.60% → 權益 $1,328</b>
+              </div>
+              <div class="card-note">水上高台(&gt;=80根守MA200) + 7線黏帶(1.02%) + 箱體(1.6%) → 第一拍 2.4x 破箱頂 + 第二拍(+1.3%, 量2.6x, 24h額$427.1M)確認</div>
+              <a href="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/1000PEPEUSDT_20261110_1215.png" target="_blank">
+                <img src="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/1000PEPEUSDT_20261110_1215.png" loading="lazy" alt="1000PEPEUSDT"/>
+              </a>
+            </div>
+        
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">CAKEUSDT</span>
+                  <span class="tag" style="background:#0277bd;color:#fff;">★ 引擎A·水上高台黏帶二拍</span>
+                  <span class="time">2026-09-21 23:30 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#ff5252">
+                  1x淨利: -4.0% (-1.07R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>2.6085</b> ｜ 止損: <b>2.51167</b> (風險 3.7%) ｜
+                出場: <b>2.51167</b> (初始止損) ｜ <b>實執倉位 0.40x: 帳戶 -1.60% → 權益 $1,582</b>
+              </div>
+              <div class="card-note">水上高台(&gt;=80根守MA200) + 7線黏帶(0.78%) + 箱體(1.6%) → 第一拍 2.5x 破箱頂 + 第二拍(+1.7%, 量3.8x, 24h額$39.9M)確認</div>
+              <a href="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/CAKEUSDT_20260921_2330.png" target="_blank">
+                <img src="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/CAKEUSDT_20260921_2330.png" loading="lazy" alt="CAKEUSDT"/>
+              </a>
+            </div>
+        
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">CHZUSDT</span>
+                  <span class="tag" style="background:#0277bd;color:#fff;">★ 引擎A·水上高台黏帶二拍</span>
+                  <span class="time">2026-09-13 09:00 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#ff5252">
+                  1x淨利: -4.9% (-1.07R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.01477</b> ｜ 止損: <b>0.0140918</b> (風險 4.6%) ｜
+                出場: <b>0.0140918</b> (初始止損) ｜ <b>實執倉位 0.33x: 帳戶 -1.60% → 權益 $1,335</b>
+              </div>
+              <div class="card-note">水上高台(&gt;=80根守MA200) + 7線黏帶(1.00%) + 箱體(2.4%) → 第一拍 4.3x 破箱頂 + 第二拍(+1.2%, 量4.6x, 24h額$15.9M)確認</div>
+              <a href="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/CHZUSDT_20260913_0900.png" target="_blank">
+                <img src="https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/cards/CHZUSDT_20260913_0900.png" loading="lazy" alt="CHZUSDT"/>
+              </a>
+            </div>
+        
+  </div>
+
+  <h2>📋 過去 90 天完整合格訊號明細表（共 94 筆，依時間由新到舊）</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th>進場時間 (TPE)</th><th>幣種</th><th>引擎類型</th><th>當下24h額</th>
+        <th>進場價</th><th>止損價 (風險)</th><th>出場價</th><th>出場原因</th>
+        <th>1x扣費資淨利</th><th>風控倉位損益</th><th>平倉後帳戶權益</th><th>盈虧比 (R)</th>
+      </tr>
+    </thead>
+    <tbody>
+      
+            <tr>
+              <td>1</td>
+              <td>2026-11-11 09:15</td>
+              <td><b>PYTHUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$14.0M</td>
+              <td>0.06736</td>
+              <td>0.0639119 (5.1%)</td>
+              <td>0.0639119</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-5.39%</b></td>
+              <td class="neg"><b>-1.58% (0.29x)</b></td>
+              <td><b>$1,307.07</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>2</td>
+              <td>2026-11-10 12:15</td>
+              <td><b>1000PEPEUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$427.1M</td>
+              <td>0.0052944</td>
+              <td>0.00508072 (4.0%)</td>
+              <td>0.00508072</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-4.31%</b></td>
+              <td class="neg"><b>-1.60% (0.37x)</b></td>
+              <td><b>$1,328.38</b></td>
+              <td class="neg"><b>-1.07R</b></td>
+            </tr>
+            
+            <tr>
+              <td>3</td>
+              <td>2026-11-08 14:00</td>
+              <td><b>RSRUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$8.5M</td>
+              <td>0.001596</td>
+              <td>0.00153 (4.1%)</td>
+              <td>0.001675</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+4.68%</b></td>
+              <td class="pos"><b>+1.70% (0.36x)</b></td>
+              <td><b>$1,350.01</b></td>
+              <td class="pos"><b>+1.13R</b></td>
+            </tr>
+            
+            <tr>
+              <td>4</td>
+              <td>2026-11-03 23:30</td>
+              <td><b>POLUSDT</b></td>
+              <td>🐂 引擎B·水下二拍</td>
+              <td>$10.1M</td>
+              <td>0.09176</td>
+              <td>0.08714 (5.0%)</td>
+              <td>0.09571</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+4.01%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,371.68)</b></td>
+              <td class="pos"><b>+0.80R</b></td>
+            </tr>
+            
+            <tr>
+              <td>5</td>
+              <td>2026-11-03 22:30</td>
+              <td><b>HYPEUSDT</b></td>
+              <td>🐂 引擎B·水下二拍</td>
+              <td>$823.9M</td>
+              <td>87.278</td>
+              <td>84.0554 (3.7%)</td>
+              <td>84.0554</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-3.94%</b></td>
+              <td class="neg"><b>-1.60% (0.41x)</b></td>
+              <td><b>$1,349.70</b></td>
+              <td class="neg"><b>-1.07R</b></td>
+            </tr>
+            
+            <tr>
+              <td>6</td>
+              <td>2026-11-03 20:45</td>
+              <td><b>1000PEPEUSDT</b></td>
+              <td>🐂 引擎B·水下二拍</td>
+              <td>$306.1M</td>
+              <td>0.0048949</td>
+              <td>0.00473669 (3.2%)</td>
+              <td>0.00473669</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-3.49%</b></td>
+              <td class="neg"><b>-1.62% (0.46x)</b></td>
+              <td><b>$1,327.48</b></td>
+              <td class="neg"><b>-1.08R</b></td>
+            </tr>
+            
+            <tr>
+              <td>7</td>
+              <td>2026-11-01 12:15</td>
+              <td><b>XPLUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$37.9M</td>
+              <td>0.08587</td>
+              <td>0.0808679 (5.8%)</td>
+              <td>0.0808679</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-6.07%</b></td>
+              <td class="neg"><b>-1.56% (0.26x)</b></td>
+              <td><b>$1,394.10</b></td>
+              <td class="neg"><b>-1.04R</b></td>
+            </tr>
+            
+            <tr>
+              <td>8</td>
+              <td>2026-10-31 23:30</td>
+              <td><b>ZROUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$48.3M</td>
+              <td>1.8076</td>
+              <td>1.70927 (5.4%)</td>
+              <td>1.70927</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-5.74%</b></td>
+              <td class="neg"><b>-1.58% (0.28x)</b></td>
+              <td><b>$1,371.68</b></td>
+              <td class="neg"><b>-1.06R</b></td>
+            </tr>
+            
+            <tr>
+              <td>9</td>
+              <td>2026-10-24 18:30</td>
+              <td><b>SLXUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$6.4M</td>
+              <td>0.05381</td>
+              <td>0.0507184 (5.7%)</td>
+              <td>0.0507184</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-5.99%</b></td>
+              <td class="neg"><b>-1.56% (0.26x)</b></td>
+              <td><b>$1,416.22</b></td>
+              <td class="neg"><b>-1.04R</b></td>
+            </tr>
+            
+            <tr>
+              <td>10</td>
+              <td>2026-10-21 23:30</td>
+              <td><b>ONEUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$6.2M</td>
+              <td>0.0014919</td>
+              <td>0.00142225 (4.7%)</td>
+              <td>0.00142225</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-4.93%</b></td>
+              <td class="neg"><b>-1.58% (0.32x)</b></td>
+              <td><b>$1,438.71</b></td>
+              <td class="neg"><b>-1.06R</b></td>
+            </tr>
+            
+            <tr>
+              <td>11</td>
+              <td>2026-10-17 22:00</td>
+              <td><b>CAKEUSDT</b></td>
+              <td>🐂 引擎B·水下二拍</td>
+              <td>$6.9M</td>
+              <td>2.2346</td>
+              <td>2.172 (2.8%)</td>
+              <td>2.172</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-3.05%</b></td>
+              <td class="neg"><b>-1.63% (0.54x)</b></td>
+              <td><b>$1,461.85</b></td>
+              <td class="neg"><b>-1.09R</b></td>
+            </tr>
+            
+            <tr>
+              <td>12</td>
+              <td>2026-10-12 17:45</td>
+              <td><b>POLUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$15.2M</td>
+              <td>0.1066</td>
+              <td>0.102424 (3.9%)</td>
+              <td>0.102424</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-4.16%</b></td>
+              <td class="neg"><b>-1.59% (0.38x)</b></td>
+              <td><b>$1,486.13</b></td>
+              <td class="neg"><b>-1.06R</b></td>
+            </tr>
+            
+            <tr>
+              <td>13</td>
+              <td>2026-10-12 01:00</td>
+              <td><b>牛来USDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$18.1M</td>
+              <td>0.08018</td>
+              <td>0.0767662 (4.3%)</td>
+              <td>0.0767662</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-4.50%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,448.09)</b></td>
+              <td class="neg"><b>-1.06R</b></td>
+            </tr>
+            
+            <tr>
+              <td>14</td>
+              <td>2026-10-12 00:00</td>
+              <td><b>JTOUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$16.5M</td>
+              <td>0.5743</td>
+              <td>0.541814 (5.7%)</td>
+              <td>0.541814</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-5.92%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,448.09)</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>15</td>
+              <td>2026-10-12 00:00</td>
+              <td><b>ENAUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$128.6M</td>
+              <td>0.23352</td>
+              <td>0.220299 (5.7%)</td>
+              <td>0.220299</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-5.93%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,448.09)</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>16</td>
+              <td>2026-10-11 23:45</td>
+              <td><b>TAOUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$70.0M</td>
+              <td>293.84</td>
+              <td>280.957 (4.4%)</td>
+              <td>280.957</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-4.66%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,448.09)</b></td>
+              <td class="neg"><b>-1.06R</b></td>
+            </tr>
+            
+            <tr>
+              <td>17</td>
+              <td>2026-10-11 20:30</td>
+              <td><b>PLUMEUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$6.3M</td>
+              <td>0.01983</td>
+              <td>0.0188611 (4.9%)</td>
+              <td>0.02168</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+9.06%</b></td>
+              <td class="pos"><b>+2.78% (0.31x)</b></td>
+              <td><b>$1,534.32</b></td>
+              <td class="pos"><b>+1.85R</b></td>
+            </tr>
+            
+            <tr>
+              <td>18</td>
+              <td>2026-10-11 00:00</td>
+              <td><b>APTUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$50.7M</td>
+              <td>0.8422</td>
+              <td>0.805087 (4.4%)</td>
+              <td>0.8908</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+5.48%</b></td>
+              <td class="pos"><b>+1.87% (0.34x)</b></td>
+              <td><b>$1,475.54</b></td>
+              <td class="pos"><b>+1.24R</b></td>
+            </tr>
+            
+            <tr>
+              <td>19</td>
+              <td>2026-10-10 22:15</td>
+              <td><b>HYPEUSDT</b></td>
+              <td>🐂 引擎B·水下二拍</td>
+              <td>$291.5M</td>
+              <td>86.719</td>
+              <td>84.22 (2.9%)</td>
+              <td>84.22</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-3.18%</b></td>
+              <td class="neg"><b>-1.66% (0.52x)</b></td>
+              <td><b>$1,509.95</b></td>
+              <td class="neg"><b>-1.10R</b></td>
+            </tr>
+            
+            <tr>
+              <td>20</td>
+              <td>2026-10-10 13:30</td>
+              <td><b>FETUSDT</b></td>
+              <td>🐂 引擎B·水下二拍</td>
+              <td>$49.3M</td>
+              <td>0.2255</td>
+              <td>0.2157 (4.3%)</td>
+              <td>0.2344</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+3.64%</b></td>
+              <td class="pos"><b>+1.26% (0.35x)</b></td>
+              <td><b>$1,494.04</b></td>
+              <td class="pos"><b>+0.84R</b></td>
+            </tr>
+            
+            <tr>
+              <td>21</td>
+              <td>2026-10-10 10:15</td>
+              <td><b>FILUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$96.3M</td>
+              <td>1.1338</td>
+              <td>1.07652 (5.1%)</td>
+              <td>1.07652</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-5.32%</b></td>
+              <td class="neg"><b>-1.58% (0.30x)</b></td>
+              <td><b>$1,448.09</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>22</td>
+              <td>2026-10-06 22:45</td>
+              <td><b>0GUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$7.7M</td>
+              <td>0.3237</td>
+              <td>0.303192 (6.3%)</td>
+              <td>0.303192</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-6.59%</b></td>
+              <td class="neg"><b>-1.56% (0.24x)</b></td>
+              <td><b>$1,471.35</b></td>
+              <td class="neg"><b>-1.04R</b></td>
+            </tr>
+            
+            <tr>
+              <td>23</td>
+              <td>2026-10-05 19:15</td>
+              <td><b>PLUMEUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$7.5M</td>
+              <td>0.01977</td>
+              <td>0.0185428 (6.2%)</td>
+              <td>0.0185428</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-6.50%</b></td>
+              <td class="neg"><b>-1.57% (0.24x)</b></td>
+              <td><b>$1,495.05</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>24</td>
+              <td>2026-10-04 15:45</td>
+              <td><b>GRASSUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$24.6M</td>
+              <td>0.7645</td>
+              <td>0.711175 (7.0%)</td>
+              <td>0.711175</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-7.22%</b></td>
+              <td class="neg"><b>-1.55% (0.22x)</b></td>
+              <td><b>$1,518.89</b></td>
+              <td class="neg"><b>-1.04R</b></td>
+            </tr>
+            
+            <tr>
+              <td>25</td>
+              <td>2026-10-02 21:30</td>
+              <td><b>ETHFIUSDT</b></td>
+              <td>🐂 引擎B·水下二拍</td>
+              <td>$31.3M</td>
+              <td>0.7681</td>
+              <td>0.731985 (4.7%)</td>
+              <td>0.731985</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-4.95%</b></td>
+              <td class="neg"><b>-1.58% (0.32x)</b></td>
+              <td><b>$1,542.63</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>26</td>
+              <td>2026-10-01 09:00</td>
+              <td><b>1000BONKUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$53.2M</td>
+              <td>0.003885</td>
+              <td>0.00369859 (4.8%)</td>
+              <td>0.00369859</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-5.05%</b></td>
+              <td class="neg"><b>-1.58% (0.31x)</b></td>
+              <td><b>$1,567.35</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>27</td>
+              <td>2026-09-30 17:00</td>
+              <td><b>DYDXUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$6.0M</td>
+              <td>0.1445</td>
+              <td>0.137125 (5.1%)</td>
+              <td>0.1449</td>
+              <td>60h到期平倉</td>
+              <td class="neg"><b>-0.04%</b></td>
+              <td class="neg"><b>-0.01% (0.29x)</b></td>
+              <td><b>$1,542.85</b></td>
+              <td class="neg"><b>-0.01R</b></td>
+            </tr>
+            
+            <tr>
+              <td>28</td>
+              <td>2026-09-30 13:45</td>
+              <td><b>PROMUSDT</b></td>
+              <td>🐂 引擎B·水下二拍</td>
+              <td>$21.5M</td>
+              <td>6.26</td>
+              <td>5.94958 (5.0%)</td>
+              <td>6.285</td>
+              <td>60h到期平倉</td>
+              <td class="pos"><b>+0.08%</b></td>
+              <td class="pos"><b>+0.03% (0.30x)</b></td>
+              <td><b>$1,543.03</b></td>
+              <td class="pos"><b>+0.02R</b></td>
+            </tr>
+            
+            <tr>
+              <td>29</td>
+              <td>2026-09-27 22:00</td>
+              <td><b>PUMPUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$125.8M</td>
+              <td>0.004701</td>
+              <td>0.00437623 (6.9%)</td>
+              <td>0.004833</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+2.55%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,644.43)</b></td>
+              <td class="pos"><b>+0.37R</b></td>
+            </tr>
+            
+            <tr>
+              <td>30</td>
+              <td>2026-09-27 16:00</td>
+              <td><b>RENDERUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$33.6M</td>
+              <td>2.084</td>
+              <td>1.98003 (5.0%)</td>
+              <td>1.98003</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-5.25%</b></td>
+              <td class="neg"><b>-1.58% (0.30x)</b></td>
+              <td><b>$1,592.49</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>31</td>
+              <td>2026-09-27 15:45</td>
+              <td><b>TAOUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$366.1M</td>
+              <td>333.76</td>
+              <td>317.384 (4.9%)</td>
+              <td>317.384</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-5.17%</b></td>
+              <td class="neg"><b>-1.58% (0.31x)</b></td>
+              <td><b>$1,618.46</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>32</td>
+              <td>2026-09-26 23:15</td>
+              <td><b>CHIPUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$14.7M</td>
+              <td>0.05053</td>
+              <td>0.0478741 (5.3%)</td>
+              <td>0.0478741</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-5.50%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,679.41)</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>33</td>
+              <td>2026-09-26 23:00</td>
+              <td><b>VIRTUALUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$31.5M</td>
+              <td>0.8116</td>
+              <td>0.772951 (4.8%)</td>
+              <td>0.772951</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-5.01%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,679.41)</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>34</td>
+              <td>2026-09-26 22:45</td>
+              <td><b>ZROUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$43.2M</td>
+              <td>1.6532</td>
+              <td>1.54121 (6.8%)</td>
+              <td>1.54121</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-7.06%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,679.41)</b></td>
+              <td class="neg"><b>-1.04R</b></td>
+            </tr>
+            
+            <tr>
+              <td>35</td>
+              <td>2026-09-26 18:45</td>
+              <td><b>STOUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$8.0M</td>
+              <td>0.04601</td>
+              <td>0.0438122 (4.8%)</td>
+              <td>0.0438122</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-5.07%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,679.41)</b></td>
+              <td class="neg"><b>-1.06R</b></td>
+            </tr>
+            
+            <tr>
+              <td>36</td>
+              <td>2026-09-26 18:15</td>
+              <td><b>ONDOUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$305.1M</td>
+              <td>0.5605</td>
+              <td>0.53912 (3.8%)</td>
+              <td>0.53912</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-4.06%</b></td>
+              <td class="neg"><b>-1.60% (0.39x)</b></td>
+              <td><b>$1,652.58</b></td>
+              <td class="neg"><b>-1.07R</b></td>
+            </tr>
+            
+            <tr>
+              <td>37</td>
+              <td>2026-09-26 12:45</td>
+              <td><b>VETUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$11.3M</td>
+              <td>0.009807</td>
+              <td>0.00935173 (4.6%)</td>
+              <td>0.00935173</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-4.90%</b></td>
+              <td class="neg"><b>-1.58% (0.32x)</b></td>
+              <td><b>$1,625.98</b></td>
+              <td class="neg"><b>-1.06R</b></td>
+            </tr>
+            
+            <tr>
+              <td>38</td>
+              <td>2026-09-24 22:15</td>
+              <td><b>VIRTUALUSDT</b></td>
+              <td>🐂 引擎B·水下二拍</td>
+              <td>$37.8M</td>
+              <td>0.7414</td>
+              <td>0.704732 (4.9%)</td>
+              <td>0.7742</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+4.14%</b></td>
+              <td class="pos"><b>+1.25% (0.30x)</b></td>
+              <td><b>$1,679.41</b></td>
+              <td class="pos"><b>+0.84R</b></td>
+            </tr>
+            
+            <tr>
+              <td>39</td>
+              <td>2026-09-24 22:15</td>
+              <td><b>ALGOUSDT</b></td>
+              <td>🐂 引擎B·水下二拍</td>
+              <td>$15.4M</td>
+              <td>0.11142</td>
+              <td>0.105156 (5.6%)</td>
+              <td>0.11641</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+4.17%</b></td>
+              <td class="pos"><b>+1.11% (0.27x)</b></td>
+              <td><b>$1,644.43</b></td>
+              <td class="pos"><b>+0.74R</b></td>
+            </tr>
+            
+            <tr>
+              <td>40</td>
+              <td>2026-09-23 09:00</td>
+              <td><b>VETUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$10.7M</td>
+              <td>0.009535</td>
+              <td>0.00908398 (4.7%)</td>
+              <td>0.00908398</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-4.99%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,581.72)</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>41</td>
+              <td>2026-09-23 04:15</td>
+              <td><b>VIRTUALUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$41.7M</td>
+              <td>0.7471</td>
+              <td>0.713869 (4.4%)</td>
+              <td>0.713869</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-4.71%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,581.72)</b></td>
+              <td class="neg"><b>-1.06R</b></td>
+            </tr>
+            
+            <tr>
+              <td>42</td>
+              <td>2026-09-22 21:45</td>
+              <td><b>LTCUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$177.5M</td>
+              <td>62.27</td>
+              <td>59.6105 (4.3%)</td>
+              <td>59.6105</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-4.54%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,581.72)</b></td>
+              <td class="neg"><b>-1.06R</b></td>
+            </tr>
+            
+            <tr>
+              <td>43</td>
+              <td>2026-09-22 21:45</td>
+              <td><b>XRPUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$2038.8M</td>
+              <td>1.5883</td>
+              <td>1.50912 (5.0%)</td>
+              <td>1.50912</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-5.26%</b></td>
+              <td class="neg"><b>-1.58% (0.30x)</b></td>
+              <td><b>$1,658.59</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>44</td>
+              <td>2026-09-22 04:45</td>
+              <td><b>STXUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$20.6M</td>
+              <td>0.3475</td>
+              <td>0.324749 (6.5%)</td>
+              <td>0.324749</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-6.83%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,607.47)</b></td>
+              <td class="neg"><b>-1.04R</b></td>
+            </tr>
+            
+            <tr>
+              <td>45</td>
+              <td>2026-09-21 23:30</td>
+              <td><b>CAKEUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$39.9M</td>
+              <td>2.6085</td>
+              <td>2.51167 (3.7%)</td>
+              <td>2.51167</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-3.96%</b></td>
+              <td class="neg"><b>-1.60% (0.40x)</b></td>
+              <td><b>$1,581.72</b></td>
+              <td class="neg"><b>-1.07R</b></td>
+            </tr>
+            
+            <tr>
+              <td>46</td>
+              <td>2026-09-21 16:45</td>
+              <td><b>DASHUSDT</b></td>
+              <td>🐂 引擎B·水下二拍</td>
+              <td>$76.0M</td>
+              <td>59.11</td>
+              <td>56.54 (4.3%)</td>
+              <td>62.3</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+5.09%</b></td>
+              <td class="pos"><b>+1.76% (0.34x)</b></td>
+              <td><b>$1,683.61</b></td>
+              <td class="pos"><b>+1.17R</b></td>
+            </tr>
+            
+            <tr>
+              <td>47</td>
+              <td>2026-09-20 21:30</td>
+              <td><b>HBARUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$62.9M</td>
+              <td>0.08449</td>
+              <td>0.0797202 (5.6%)</td>
+              <td>0.09973</td>
+              <td>60h到期平倉</td>
+              <td class="pos"><b>+17.72%</b></td>
+              <td class="pos"><b>+4.71% (0.27x)</b></td>
+              <td><b>$1,655.92</b></td>
+              <td class="pos"><b>+3.14R</b></td>
+            </tr>
+            
+            <tr>
+              <td>48</td>
+              <td>2026-09-20 20:30</td>
+              <td><b>ALGOUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$25.4M</td>
+              <td>0.10478</td>
+              <td>0.100409 (4.2%)</td>
+              <td>0.11095</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+5.62%</b></td>
+              <td class="pos"><b>+2.02% (0.36x)</b></td>
+              <td><b>$1,607.47</b></td>
+              <td class="pos"><b>+1.35R</b></td>
+            </tr>
+            
+            <tr>
+              <td>49</td>
+              <td>2026-09-20 01:00</td>
+              <td><b>TRUMPUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$108.4M</td>
+              <td>2.16</td>
+              <td>2.03293 (5.9%)</td>
+              <td>2.03293</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-6.14%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,378.42)</b></td>
+              <td class="neg"><b>-1.04R</b></td>
+            </tr>
+            
+            <tr>
+              <td>50</td>
+              <td>2026-09-20 00:45</td>
+              <td><b>1000PEPEUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$246.3M</td>
+              <td>0.0040522</td>
+              <td>0.00378941 (6.5%)</td>
+              <td>0.0050217</td>
+              <td>60h到期平倉</td>
+              <td class="pos"><b>+23.61%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,378.42)</b></td>
+              <td class="pos"><b>+3.64R</b></td>
+            </tr>
+            
+            <tr>
+              <td>51</td>
+              <td>2026-09-19 21:00</td>
+              <td><b>XLMUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$94.7M</td>
+              <td>0.20173</td>
+              <td>0.191057 (5.3%)</td>
+              <td>0.191057</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-5.55%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,378.42)</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>52</td>
+              <td>2026-09-19 20:15</td>
+              <td><b>RENDERUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$21.8M</td>
+              <td>1.627</td>
+              <td>1.53093 (5.9%)</td>
+              <td>1.53093</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-6.16%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,378.42)</b></td>
+              <td class="neg"><b>-1.04R</b></td>
+            </tr>
+            
+            <tr>
+              <td>53</td>
+              <td>2026-09-18 11:45</td>
+              <td><b>1000BONKUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$15.3M</td>
+              <td>0.002836</td>
+              <td>0.00268362 (5.4%)</td>
+              <td>0.002984</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+4.94%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,335.40)</b></td>
+              <td class="pos"><b>+0.92R</b></td>
+            </tr>
+            
+            <tr>
+              <td>54</td>
+              <td>2026-09-18 11:30</td>
+              <td><b>AVAXUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$86.2M</td>
+              <td>7.94</td>
+              <td>7.52991 (5.2%)</td>
+              <td>11.24</td>
+              <td>60h到期平倉</td>
+              <td class="pos"><b>+41.25%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,335.40)</b></td>
+              <td class="pos"><b>+7.99R</b></td>
+            </tr>
+            
+            <tr>
+              <td>55</td>
+              <td>2026-09-18 11:00</td>
+              <td><b>TRUMPUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$71.6M</td>
+              <td>2.037</td>
+              <td>1.92714 (5.4%)</td>
+              <td>2.016</td>
+              <td>60h到期平倉</td>
+              <td class="neg"><b>-1.35%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,335.40)</b></td>
+              <td class="neg"><b>-0.25R</b></td>
+            </tr>
+            
+            <tr>
+              <td>56</td>
+              <td>2026-09-18 10:00</td>
+              <td><b>ARUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$5.3M</td>
+              <td>2.742</td>
+              <td>2.5761 (6.1%)</td>
+              <td>4.181</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+52.18%</b></td>
+              <td class="pos"><b>+12.94% (0.25x)</b></td>
+              <td><b>$1,575.66</b></td>
+              <td class="pos"><b>+8.63R</b></td>
+            </tr>
+            
+            <tr>
+              <td>57</td>
+              <td>2026-09-18 09:45</td>
+              <td><b>ORDIUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$9.0M</td>
+              <td>4.319</td>
+              <td>4.10754 (4.9%)</td>
+              <td>4.59</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+5.98%</b></td>
+              <td class="pos"><b>+1.83% (0.31x)</b></td>
+              <td><b>$1,402.88</b></td>
+              <td class="pos"><b>+1.22R</b></td>
+            </tr>
+            
+            <tr>
+              <td>58</td>
+              <td>2026-09-16 19:30</td>
+              <td><b>DASHUSDT</b></td>
+              <td>🐂 引擎B·水下二拍</td>
+              <td>$62.9M</td>
+              <td>53.86</td>
+              <td>51.0942 (5.1%)</td>
+              <td>59.96</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+11.03%</b></td>
+              <td class="pos"><b>+3.22% (0.29x)</b></td>
+              <td><b>$1,378.42</b></td>
+              <td class="pos"><b>+2.15R</b></td>
+            </tr>
+            
+            <tr>
+              <td>59</td>
+              <td>2026-09-13 09:00</td>
+              <td><b>CHZUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$15.9M</td>
+              <td>0.01477</td>
+              <td>0.0140918 (4.6%)</td>
+              <td>0.0140918</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-4.90%</b></td>
+              <td class="neg"><b>-1.60% (0.33x)</b></td>
+              <td><b>$1,335.40</b></td>
+              <td class="neg"><b>-1.07R</b></td>
+            </tr>
+            
+            <tr>
+              <td>60</td>
+              <td>2026-09-12 07:30</td>
+              <td><b>BTWUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$23.8M</td>
+              <td>0.51877</td>
+              <td>0.495886 (4.4%)</td>
+              <td>0.55062</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+5.86%</b></td>
+              <td class="pos"><b>+1.99% (0.34x)</b></td>
+              <td><b>$1,356.69</b></td>
+              <td class="pos"><b>+1.33R</b></td>
+            </tr>
+            
+            <tr>
+              <td>61</td>
+              <td>2026-09-08 20:15</td>
+              <td><b>ATOMUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$25.5M</td>
+              <td>1.736</td>
+              <td>1.63173 (6.0%)</td>
+              <td>1.845</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+6.01%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,368.74)</b></td>
+              <td class="pos"><b>+1.00R</b></td>
+            </tr>
+            
+            <tr>
+              <td>62</td>
+              <td>2026-09-08 17:30</td>
+              <td><b>ETCUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$41.0M</td>
+              <td>8.229</td>
+              <td>7.8765 (4.3%)</td>
+              <td>8.438</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+2.27%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,368.74)</b></td>
+              <td class="pos"><b>+0.53R</b></td>
+            </tr>
+            
+            <tr>
+              <td>63</td>
+              <td>2026-09-08 13:00</td>
+              <td><b>KAITOUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$10.7M</td>
+              <td>0.3378</td>
+              <td>0.316577 (6.3%)</td>
+              <td>0.316577</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-6.57%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,368.74)</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>64</td>
+              <td>2026-09-07 21:45</td>
+              <td><b>STRKUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$15.1M</td>
+              <td>0.03178</td>
+              <td>0.0303991 (4.3%)</td>
+              <td>0.0303991</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-4.61%</b></td>
+              <td class="neg"><b>-1.59% (0.35x)</b></td>
+              <td><b>$1,346.94</b></td>
+              <td class="neg"><b>-1.06R</b></td>
+            </tr>
+            
+            <tr>
+              <td>65</td>
+              <td>2026-09-07 20:45</td>
+              <td><b>FILUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$80.4M</td>
+              <td>0.856</td>
+              <td>0.802054 (6.3%)</td>
+              <td>0.8147</td>
+              <td>60h到期平倉</td>
+              <td class="neg"><b>-5.14%</b></td>
+              <td class="neg"><b>-1.22% (0.24x)</b></td>
+              <td><b>$1,330.19</b></td>
+              <td class="neg"><b>-0.82R</b></td>
+            </tr>
+            
+            <tr>
+              <td>66</td>
+              <td>2026-09-07 13:00</td>
+              <td><b>ICPUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$34.3M</td>
+              <td>2.833</td>
+              <td>2.67963 (5.4%)</td>
+              <td>2.999</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+5.59%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,360.83)</b></td>
+              <td class="pos"><b>+1.03R</b></td>
+            </tr>
+            
+            <tr>
+              <td>67</td>
+              <td>2026-09-07 06:30</td>
+              <td><b>STRKUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$21.3M</td>
+              <td>0.0321</td>
+              <td>0.02993 (6.8%)</td>
+              <td>0.02993</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-7.05%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,360.83)</b></td>
+              <td class="neg"><b>-1.04R</b></td>
+            </tr>
+            
+            <tr>
+              <td>68</td>
+              <td>2026-09-06 21:45</td>
+              <td><b>ICPUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$27.7M</td>
+              <td>2.771</td>
+              <td>2.64171 (4.7%)</td>
+              <td>2.999</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+7.94%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,360.83)</b></td>
+              <td class="pos"><b>+1.70R</b></td>
+            </tr>
+            
+            <tr>
+              <td>69</td>
+              <td>2026-09-06 20:00</td>
+              <td><b>TAOUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$103.7M</td>
+              <td>245.61</td>
+              <td>233.073 (5.1%)</td>
+              <td>262.99</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+6.80%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,360.83)</b></td>
+              <td class="pos"><b>+1.33R</b></td>
+            </tr>
+            
+            <tr>
+              <td>70</td>
+              <td>2026-09-06 18:30</td>
+              <td><b>WLDUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$114.5M</td>
+              <td>0.4111</td>
+              <td>0.394709 (4.0%)</td>
+              <td>0.4632</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+12.38%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,360.83)</b></td>
+              <td class="pos"><b>+3.10R</b></td>
+            </tr>
+            
+            <tr>
+              <td>71</td>
+              <td>2026-09-06 15:30</td>
+              <td><b>NEARUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$269.3M</td>
+              <td>2.294</td>
+              <td>2.17165 (5.3%)</td>
+              <td>2.373</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+3.17%</b></td>
+              <td class="pos"><b>+0.89% (0.28x)</b></td>
+              <td><b>$1,372.97</b></td>
+              <td class="pos"><b>+0.60R</b></td>
+            </tr>
+            
+            <tr>
+              <td>72</td>
+              <td>2026-09-05 15:00</td>
+              <td><b>BNBUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$398.5M</td>
+              <td>735</td>
+              <td>718.71 (2.2%)</td>
+              <td>761.32</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+3.31%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,333.27)</b></td>
+              <td class="pos"><b>+1.49R</b></td>
+            </tr>
+            
+            <tr>
+              <td>73</td>
+              <td>2026-09-05 09:15</td>
+              <td><b>1000BONKUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$43.7M</td>
+              <td>0.003356</td>
+              <td>0.00313572 (6.6%)</td>
+              <td>0.00313572</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-6.86%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,333.27)</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>74</td>
+              <td>2026-09-05 08:45</td>
+              <td><b>ZKUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$7.2M</td>
+              <td>0.00995</td>
+              <td>0.00931433 (6.4%)</td>
+              <td>0.010879</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+9.03%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,333.27)</b></td>
+              <td class="pos"><b>+1.41R</b></td>
+            </tr>
+            
+            <tr>
+              <td>75</td>
+              <td>2026-09-05 08:30</td>
+              <td><b>ARUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$11.5M</td>
+              <td>2.695</td>
+              <td>2.56386 (4.9%)</td>
+              <td>2.973</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+10.03%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,333.27)</b></td>
+              <td class="pos"><b>+2.06R</b></td>
+            </tr>
+            
+            <tr>
+              <td>76</td>
+              <td>2026-09-05 06:15</td>
+              <td><b>GRAMUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$15.5M</td>
+              <td>1.426</td>
+              <td>1.36227 (4.5%)</td>
+              <td>1.417</td>
+              <td>60h到期平倉</td>
+              <td class="neg"><b>-0.95%</b></td>
+              <td class="neg"><b>-0.32% (0.34x)</b></td>
+              <td><b>$1,368.74</b></td>
+              <td class="neg"><b>-0.21R</b></td>
+            </tr>
+            
+            <tr>
+              <td>77</td>
+              <td>2026-09-03 23:45</td>
+              <td><b>PENDLEUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$14.9M</td>
+              <td>1.9075</td>
+              <td>1.82439 (4.4%)</td>
+              <td>2.0262</td>
+              <td>60h到期平倉</td>
+              <td class="pos"><b>+5.91%</b></td>
+              <td class="pos"><b>+2.03% (0.34x)</b></td>
+              <td><b>$1,360.83</b></td>
+              <td class="pos"><b>+1.36R</b></td>
+            </tr>
+            
+            <tr>
+              <td>78</td>
+              <td>2026-09-03 23:15</td>
+              <td><b>OPUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$42.3M</td>
+              <td>0.10228</td>
+              <td>0.097659 (4.5%)</td>
+              <td>0.097659</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-4.78%</b></td>
+              <td class="neg"><b>-1.59% (0.33x)</b></td>
+              <td><b>$1,333.27</b></td>
+              <td class="neg"><b>-1.06R</b></td>
+            </tr>
+            
+            <tr>
+              <td>79</td>
+              <td>2026-09-01 15:45</td>
+              <td><b>CAKEUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$13.2M</td>
+              <td>1.9015</td>
+              <td>1.83652 (3.4%)</td>
+              <td>1.83652</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-3.66%</b></td>
+              <td class="neg"><b>-1.61% (0.44x)</b></td>
+              <td><b>$1,354.79</b></td>
+              <td class="neg"><b>-1.07R</b></td>
+            </tr>
+            
+            <tr>
+              <td>80</td>
+              <td>2026-08-27 17:00</td>
+              <td><b>ETHFIUSDT</b></td>
+              <td>🐂 引擎B·水下二拍</td>
+              <td>$16.1M</td>
+              <td>0.5888</td>
+              <td>0.5636 (4.3%)</td>
+              <td>0.5636</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-4.53%</b></td>
+              <td class="neg"><b>-1.59% (0.35x)</b></td>
+              <td><b>$1,376.91</b></td>
+              <td class="neg"><b>-1.06R</b></td>
+            </tr>
+            
+            <tr>
+              <td>81</td>
+              <td>2026-08-25 14:00</td>
+              <td><b>APRUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$8.2M</td>
+              <td>0.2157</td>
+              <td>0.201496 (6.6%)</td>
+              <td>0.201496</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-6.89%</b></td>
+              <td class="neg"><b>-1.57% (0.23x)</b></td>
+              <td><b>$1,399.47</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>82</td>
+              <td>2026-08-25 05:30</td>
+              <td><b>ASTERUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$98.9M</td>
+              <td>0.7108</td>
+              <td>0.669658 (5.8%)</td>
+              <td>0.7163</td>
+              <td>60h到期平倉</td>
+              <td class="pos"><b>+0.46%</b></td>
+              <td class="pos"><b>+0.12% (0.26x)</b></td>
+              <td><b>$1,421.76</b></td>
+              <td class="pos"><b>+0.08R</b></td>
+            </tr>
+            
+            <tr>
+              <td>83</td>
+              <td>2026-08-24 05:00</td>
+              <td><b>CCUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$5.5M</td>
+              <td>0.12131</td>
+              <td>0.116586 (3.9%)</td>
+              <td>0.12268</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+0.86%</b></td>
+              <td class="pos"><b>+0.33% (0.39x)</b></td>
+              <td><b>$1,420.07</b></td>
+              <td class="pos"><b>+0.22R</b></td>
+            </tr>
+            
+            <tr>
+              <td>84</td>
+              <td>2026-08-21 19:15</td>
+              <td><b>MORPHOUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$17.4M</td>
+              <td>2.3715</td>
+              <td>2.2459 (5.3%)</td>
+              <td>2.2459</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-5.56%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,000.00)</b></td>
+              <td class="neg"><b>-1.05R</b></td>
+            </tr>
+            
+            <tr>
+              <td>85</td>
+              <td>2026-08-21 16:45</td>
+              <td><b>SLXUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$5.1M</td>
+              <td>0.07106</td>
+              <td>0.0663717 (6.6%)</td>
+              <td>0.0663717</td>
+              <td>初始止損</td>
+              <td class="neg"><b>-6.86%</b></td>
+              <td class="neg"><b>滿倉略過</b></td>
+              <td><b>($1,000.00)</b></td>
+              <td class="neg"><b>-1.04R</b></td>
+            </tr>
+            
+            <tr>
+              <td>86</td>
+              <td>2026-08-21 16:15</td>
+              <td><b>RENDERUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$17.8M</td>
+              <td>1.476</td>
+              <td>1.39288 (5.6%)</td>
+              <td>1.48043</td>
+              <td>保本鎖利止盈</td>
+              <td class="pos"><b>+0.03%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,000.00)</b></td>
+              <td class="pos"><b>+0.01R</b></td>
+            </tr>
+            
+            <tr>
+              <td>87</td>
+              <td>2026-08-21 14:30</td>
+              <td><b>GIGGLEUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$23.1M</td>
+              <td>36.95</td>
+              <td>34.7304 (6.0%)</td>
+              <td>37.0609</td>
+              <td>保本鎖利止盈</td>
+              <td class="pos"><b>+0.03%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,000.00)</b></td>
+              <td class="pos"><b>+0.01R</b></td>
+            </tr>
+            
+            <tr>
+              <td>88</td>
+              <td>2026-08-20 00:45</td>
+              <td><b>PEOPLEUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$6.3M</td>
+              <td>0.008029</td>
+              <td>0.00752492 (6.3%)</td>
+              <td>0.011036</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+37.15%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,000.00)</b></td>
+              <td class="pos"><b>+5.92R</b></td>
+            </tr>
+            
+            <tr>
+              <td>89</td>
+              <td>2026-08-19 23:30</td>
+              <td><b>METUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$6.3M</td>
+              <td>0.1818</td>
+              <td>0.169261 (6.9%)</td>
+              <td>0.2101</td>
+              <td>破MA99趨勢止盈</td>
+              <td class="pos"><b>+15.29%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,000.00)</b></td>
+              <td class="pos"><b>+2.22R</b></td>
+            </tr>
+            
+            <tr>
+              <td>90</td>
+              <td>2026-08-19 23:15</td>
+              <td><b>PENGUUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$24.4M</td>
+              <td>0.006421</td>
+              <td>0.00609005 (5.2%)</td>
+              <td>0.009295</td>
+              <td>60h到期平倉</td>
+              <td class="pos"><b>+44.44%</b></td>
+              <td class="pos"><b>滿倉略過</b></td>
+              <td><b>($1,000.00)</b></td>
+              <td class="pos"><b>+8.62R</b></td>
+            </tr>
+            
+            <tr>
+              <td>91</td>
+              <td>2026-08-19 23:15</td>
+              <td><b>FILUSDT</b></td>
+              <td>🐂 引擎B·水下二拍</td>
+              <td>$42.0M</td>
+              <td>0.6684</td>
+              <td>0.631412 (5.5%)</td>
+              <td>0.8452</td>
+              <td>60h到期平倉</td>
+              <td class="pos"><b>+26.14%</b></td>
+              <td class="pos"><b>+7.08% (0.27x)</b></td>
+              <td><b>$1,415.36</b></td>
+              <td class="pos"><b>+4.72R</b></td>
+            </tr>
+            
+            <tr>
+              <td>92</td>
+              <td>2026-08-19 22:45</td>
+              <td><b>SOLUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$1140.5M</td>
+              <td>80.84</td>
+              <td>76.8122 (5.0%)</td>
+              <td>95.65</td>
+              <td>60h到期平倉</td>
+              <td class="pos"><b>+18.01%</b></td>
+              <td class="pos"><b>+5.42% (0.30x)</b></td>
+              <td><b>$1,344.52</b></td>
+              <td class="pos"><b>+3.61R</b></td>
+            </tr>
+            
+            <tr>
+              <td>93</td>
+              <td>2026-08-19 22:45</td>
+              <td><b>SUIUSDT</b></td>
+              <td>🐂 引擎B·水下二拍</td>
+              <td>$102.7M</td>
+              <td>0.6704</td>
+              <td>0.6538 (2.5%)</td>
+              <td>0.9071</td>
+              <td>60h到期平倉</td>
+              <td class="pos"><b>+34.99%</b></td>
+              <td class="pos"><b>+21.20% (0.61x)</b></td>
+              <td><b>$1,290.31</b></td>
+              <td class="pos"><b>+14.13R</b></td>
+            </tr>
+            
+            <tr>
+              <td>94</td>
+              <td>2026-08-19 10:15</td>
+              <td><b>MONUSDT</b></td>
+              <td>★ 引擎A·水上二拍</td>
+              <td>$5.8M</td>
+              <td>0.02194</td>
+              <td>0.0208981 (4.7%)</td>
+              <td>0.02745</td>
+              <td>60h到期平倉</td>
+              <td class="pos"><b>+24.80%</b></td>
+              <td class="pos"><b>+7.83% (0.32x)</b></td>
+              <td><b>$1,078.33</b></td>
+              <td class="pos"><b>+5.22R</b></td>
+            </tr>
+            
+    </tbody>
+  </table>
+</div>
+</body>
+</html>

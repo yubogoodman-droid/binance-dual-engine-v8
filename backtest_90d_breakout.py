@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -846,6 +847,40 @@ def generate_html_report(
 """
     out_html.parent.mkdir(parents=True, exist_ok=True)
     out_html.write_text(html, encoding="utf-8")
+    write_view_html(out_html)
+
+
+def _git_branch(repo_root: Path) -> str:
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=repo_root,
+            text=True,
+        ).strip()
+        return out or "main"
+    except Exception:
+        return "main"
+
+
+def write_view_html(src_html: Path, repo_slug: str = "yubogoodman-droid/binance-dual-engine-v8") -> Path:
+    """產出供 htmlpreview.github.io 免部署即時開啟的 view.html（圖片轉為 raw.githubusercontent 絕對網址）。"""
+    repo_root = Path(__file__).resolve().parent
+    src_resolved = src_html.resolve()
+    try:
+        rel_dir = src_resolved.parent.relative_to(repo_root).as_posix()
+    except ValueError:
+        rel_dir = src_html.parent.as_posix()
+    branch = _git_branch(repo_root)
+    raw_base = f"https://raw.githubusercontent.com/{repo_slug}/{branch}/{rel_dir}/"
+    content = (
+        src_resolved.read_text(encoding="utf-8")
+        .replace('src="equity_curve.png"', f'src="{raw_base}equity_curve.png"')
+        .replace('src="cards/', f'src="{raw_base}cards/')
+        .replace('href="cards/', f'href="{raw_base}cards/')
+    )
+    view_path = src_resolved.with_name("view.html")
+    view_path.write_text(content, encoding="utf-8")
+    return view_path
 
 
 def summarize_trades(trades: Sequence[TradeResult], label: str) -> None:
