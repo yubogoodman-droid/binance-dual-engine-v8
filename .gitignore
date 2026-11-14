@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.pkl
+*.npz
+.DS_Store
+.env
+pofanfan_1h_ma25/

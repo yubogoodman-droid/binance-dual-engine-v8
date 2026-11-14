@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>幣安永續「v8 雙引擎合體版：AKE平地巨量 + 牛來水下穿MA200二拍」90天實盤級回測報告 (15m)</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 24px; }
+  .container { max-width: 1420px; margin: 0 auto; }
+  h1 { font-size: 26px; margin-bottom: 6px; color: #f8fafc; }
+  .sub { color: #94a3b8; font-size: 14px; margin-bottom: 22px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 14px; margin-bottom: 24px; }
+  .kpi { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 16px; }
+  .kpi .label { font-size: 13px; color: #94a3b8; }
+  .kpi .val { font-size: 26px; font-weight: 800; margin-top: 6px; color: #38bdf8; }
+  .kpi .val.green { color: #4ade80; }
+  .kpi .val.amber { color: #fbbf24; }
+  .eq-box { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 16px; margin-bottom: 28px; text-align: center; }
+  .eq-box img { max-width: 100%; border-radius: 8px; }
+  h2 { font-size: 20px; margin: 28px 0 14px; color: #f1f5f9; border-left: 4px solid #38bdf8; padding-left: 10px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(580px, 1fr)); gap: 18px; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 14px; }
+  .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .sym { font-size: 18px; font-weight: 800; color: #f8fafc; margin-right: 8px; }
+  .tag { background: #334155; color: #e2e8f0; padding: 3px 8px; border-radius: 6px; font-size: 12px; margin-right: 8px; font-weight: 600; }
+  .time { color: #94a3b8; font-size: 13px; }
+  .pnl-badge { color: #fff; font-weight: 800; padding: 4px 10px; border-radius: 8px; font-size: 14px; }
+  .card-meta { font-size: 13px; color: #cbd5e1; margin-bottom: 4px; }
+  .card-note { font-size: 12.5px; color: #94a3b8; margin-bottom: 10px; }
+  .card img { width: 100%; border-radius: 8px; border: 1px solid #334155; }
+  table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 10px; overflow: hidden; font-size: 13.5px; margin-bottom: 24px; }
+  th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #334155; }
+  th { background: #0f172a; color: #94a3b8; font-weight: 600; }
+  .pos { color: #4ade80; }
+  .neg { color: #f87171; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🚀 幣安永續合約「v8 雙引擎合體版：AKE平地巨量 + 牛來水下穿MA200二拍」過去 90 天實盤級回測戰績看板</h1>
+  <div class="sub">
+    K線週期：<b>15m</b> ｜ 掃描標的池：<b>174 檔純加密貨幣 USDT 永續合約（0% 訊號重疊）</b> ｜
+    雙引擎分工：<b>【引擎A】全8均線真底部收斂+平地巨量突破(破MA25出場) ＋ 【引擎B·牛來】水下築底&ge;80根+7線黏帶穿MA200+第二拍紅K&ge;1%強確認(破1H MA25出場)</b>（已扣手續費與滑價 0.12%）
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="label">初始本金 / 槓桿</div><div class="val">$1,000 (3x)</div></div>
+    <div class="kpi"><div class="label">3x 滾倉最終資金</div><div class="val green">$1,163,718.92</div></div>
+    <div class="kpi"><div class="label">3x 滾倉總報酬率</div><div class="val green">+116,271.9%</div></div>
+    <div class="kpi"><div class="label">固定 3x 不滾倉最終</div><div class="val">$21,430.57</div></div>
+    <div class="kpi"><div class="label">雙引擎總勝率 (15 筆)</div><div class="val green">86.7%</div></div>
+    <div class="kpi"><div class="label">雙引擎獲利因子 (PF)</div><div class="val amber">169.44</div></div>
+    <div class="kpi"><div class="label">3x 滾倉最大回撤</div><div class="val" style="color:#f87171">-7.2%</div></div>
+  </div>
+
+  <h2>⚡ 雙引擎分項表現對照（0% 訊號重疊，互補增效）</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>子引擎名稱</th><th>核心形態與出場邏輯</th><th>交易筆數</th><th>實戰勝率</th><th>1x 累計報酬</th><th>累積盈虧比 (R)</th><th>獲利因子 (PF)</th><th>代表標竿大魚</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>★ 引擎 A（AKE / TAC / SHELL 平地爆量）</b></td>
+        <td>8均線全收斂(&le;3.4%) + 底部黃金收斂/極窄箱體 + 10~34x 巨量突破 → 沿 15m MA25 移動停利</td>
+        <td><b>8 筆</b> (6勝)</td>
+        <td class="pos"><b>75.0%</b></td>
+        <td class="pos"><b>+444.8%</b></td>
+        <td class="pos"><b>+47.6R</b></td>
+        <td><b>90.41</b></td>
+        <td>AKE (+281%)、TAC (+154%)、AIN (+96%)、SHELL (+68%)、BULLA (+33%)</td>
+      </tr>
+      <tr>
+        <td><b>🐂 引擎 B（牛來 · 水下穿MA200二拍）</b></td>
+        <td>MA200水下築底&ge;80根 + 7線黏帶&le;1.8% + 第一拍2~8x穿MA200 + 第二拍紅K&ge;1%強確認 → 沿 MA99 (1H MA25) 移動停利</td>
+        <td><b>7 筆</b> (7勝)</td>
+        <td class="pos"><b>100.0%</b></td>
+        <td class="pos"><b>+236.2%</b></td>
+        <td class="pos"><b>+42.1R</b></td>
+        <td><b>999.00</b></td>
+        <td>ESPORTS (+106%)、RLC (+102%)、ARKM (+20%)、PUMP (+20%)</td>
+      </tr>
+      <tr style="background:#0f172a;">
+        <td><b>🚀 雙引擎合體總計（單倉排他滾倉）</b></td>
+        <td>雙引擎同時監看、持倉中不重複開倉（實際執行 12 筆 / 持倉重疊略過 3 筆）</td>
+        <td><b>15 筆</b> (13勝)</td>
+        <td class="pos"><b>86.7%</b></td>
+        <td class="pos"><b>+681.0%</b></td>
+        <td class="pos"><b>+89.8R</b></td>
+        <td class="pos"><b>169.44</b></td>
+        <td>3x 滾倉回撤僅 <b>-7.2%</b>，固定 3x 單利達 <b>$21,431</b></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="eq-box">
+    <img src="equity_curve.png" alt="Equity Curve"/>
+  </div>
+
+  <h2>📈 獲利交易復盤圖卡（共 13 筆）</h2>
+  <div class="grid">
+    
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">AKEUSDT</span>
+                  <span class="tag" style="background:#b71c1c;color:#fff;">★ 引擎A·底部爆量起漲</span>
+                  <span class="time">2026-11-13 13:15 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x: +281.2% ｜ 3x: +843.7% (+27.07R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.002847</b> ｜ 初始止損: <b>0.00255118</b> (風險 10.4%) ｜
+                出場: <b>0.010857</b> (破MA25止盈) ｜ <b>3x: +843.7% → 餘額 $1,163,719</b>
+              </div>
+              <div class="card-note">底部8線糾結(2.9%) + 箱體壓縮(5.3%) + 實體飽滿(69%) → 爆量 11.7x 長紅(+8.1%)突破起漲</div>
+              <a href="cards/AKEUSDT_20261113_1315.png" target="_blank">
+                <img src="cards/AKEUSDT_20261113_1315.png" loading="lazy" alt="AKEUSDT"/>
+              </a>
+            </div>
+            
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">ESPORTSUSDT</span>
+                  <span class="tag" style="background:#6a1b9a;color:#fff;">🐂 引擎B·牛來黏帶穿MA200二拍</span>
+                  <span class="time">2026-10-31 17:45 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x: +106.4% ｜ 3x: +319.1% (+17.29R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.007515</b> ｜ 初始止損: <b>0.00705276</b> (風險 6.2%) ｜
+                出場: <b>0.015518</b> (破MA99(1H MA25)止盈) ｜ <b>3x: +319.1% → 餘額 $112,527</b>
+              </div>
+              <div class="card-note">牛來水下築底(160根) + 7線黏帶(1.03%) + 碗口(2.90%) → 第一拍 5.3x 穿MA200 + 第二拍(+1.3%, 量6.6x)扇形展開強確認</div>
+              <a href="cards/ESPORTSUSDT_20261031_1745.png" target="_blank">
+                <img src="cards/ESPORTSUSDT_20261031_1745.png" loading="lazy" alt="ESPORTSUSDT"/>
+              </a>
+            </div>
+            
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">RLCUSDT</span>
+                  <span class="tag" style="background:#6a1b9a;color:#fff;">🐂 引擎B·牛來黏帶穿MA200二拍</span>
+                  <span class="time">2026-10-05 10:45 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x: +101.9% ｜ 3x: +305.6% (+16.87R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.3855</b> ｜ 初始止損: <b>0.362213</b> (風險 6.0%) ｜
+                出場: <b>0.7787</b> (破MA99(1H MA25)止盈) ｜ <b>3x: +305.6% → 餘額 $23,924</b>
+              </div>
+              <div class="card-note">牛來水下築底(126根) + 7線黏帶(0.67%) + 碗口(0.55%) → 第一拍 5.4x 穿MA200 + 第二拍(+3.6%, 量8.6x)扇形展開強確認</div>
+              <a href="cards/RLCUSDT_20261005_1045.png" target="_blank">
+                <img src="cards/RLCUSDT_20261005_1045.png" loading="lazy" alt="RLCUSDT"/>
+              </a>
+            </div>
+            
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">AINUSDT</span>
+                  <span class="tag" style="background:#b71c1c;color:#fff;">★ 引擎A·底部爆量起漲</span>
+                  <span class="time">2026-10-03 22:00 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x: +96.4% ｜ 3x: +289.1% (+13.58R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.02474</b> ｜ 初始止損: <b>0.0229845</b> (風險 7.1%) ｜
+                出場: <b>0.04861</b> (破MA25止盈) ｜ <b>3x: +289.1% → 餘額 $5,898</b>
+              </div>
+              <div class="card-note">底部8線糾結(2.1%) + 箱體壓縮(2.3%) + 實體飽滿(87%) → 爆量 30.5x 長紅(+6.5%)突破起漲</div>
+              <a href="cards/AINUSDT_20261003_2200.png" target="_blank">
+                <img src="cards/AINUSDT_20261003_2200.png" loading="lazy" alt="AINUSDT"/>
+              </a>
+            </div>
+            
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">SHELLUSDT</span>
+                  <span class="tag" style="background:#b71c1c;color:#fff;">★ 引擎A·底部爆量起漲</span>
+                  <span class="time">2026-11-13 23:30 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x: +67.7% ｜ 3x: +203.1% (+7.09R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.02134</b> ｜ 初始止損: <b>0.019303</b> (風險 9.5%) ｜
+                出場: <b>0.03581</b> (破MA25止盈) ｜ <b>持倉中重疊(跳過)</b>
+              </div>
+              <div class="card-note">底部8線糾結(3.3%) + 箱體壓縮(5.9%) + 實體飽滿(95%) → 爆量 21.4x 長紅(+4.0%)突破起漲</div>
+              <a href="cards/SHELLUSDT_20261113_2330.png" target="_blank">
+                <img src="cards/SHELLUSDT_20261113_2330.png" loading="lazy" alt="SHELLUSDT"/>
+              </a>
+            </div>
+            
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">ARKMUSDT</span>
+                  <span class="tag" style="background:#6a1b9a;color:#fff;">🐂 引擎B·牛來黏帶穿MA200二拍</span>
+                  <span class="time">2026-08-19 23:00 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x: +20.3% ｜ 3x: +61.0% (+6.46R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.089</b> ｜ 初始止損: <b>0.0862</b> (風險 3.1%) ｜
+                出場: <b>0.1072</b> (破MA99(1H MA25)止盈) ｜ <b>3x: +61.0% → 餘額 $1,610</b>
+              </div>
+              <div class="card-note">牛來水下築底(200根) + 7線黏帶(0.39%) + 碗口(0.64%) → 第一拍 3.1x 穿MA200 + 第二拍(+1.4%, 量7.5x)扇形展開強確認</div>
+              <a href="cards/ARKMUSDT_20260819_2300.png" target="_blank">
+                <img src="cards/ARKMUSDT_20260819_2300.png" loading="lazy" alt="ARKMUSDT"/>
+              </a>
+            </div>
+            
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">POLUSDT</span>
+                  <span class="tag" style="background:#6a1b9a;color:#fff;">🐂 引擎B·牛來黏帶穿MA200二拍</span>
+                  <span class="time">2026-11-03 23:30 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x: +4.2% ｜ 3x: +12.6% (+0.83R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.09176</b> ｜ 初始止損: <b>0.08714</b> (風險 5.0%) ｜
+                出場: <b>0.09571</b> (破MA99(1H MA25)止盈) ｜ <b>持倉中重疊(跳過)</b>
+              </div>
+              <div class="card-note">牛來水下築底(200根) + 7線黏帶(0.43%) + 碗口(1.18%) → 第一拍 3.4x 穿MA200 + 第二拍(+1.4%, 量4.1x)扇形展開強確認</div>
+              <a href="cards/POLUSDT_20261103_2330.png" target="_blank">
+                <img src="cards/POLUSDT_20261103_2330.png" loading="lazy" alt="POLUSDT"/>
+              </a>
+            </div>
+            
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">MAGICUSDT</span>
+                  <span class="tag" style="background:#6a1b9a;color:#fff;">🐂 引擎B·牛來黏帶穿MA200二拍</span>
+                  <span class="time">2026-11-03 22:30 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x: +3.2% ｜ 3x: +9.6% (+0.61R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.08172</b> ｜ 初始止損: <b>0.0774668</b> (風險 5.2%) ｜
+                出場: <b>0.08443</b> (破MA99(1H MA25)止盈) ｜ <b>3x: +9.6% → 餘額 $123,316</b>
+              </div>
+              <div class="card-note">牛來水下築底(200根) + 7線黏帶(1.05%) + 碗口(1.35%) → 第一拍 3.9x 穿MA200 + 第二拍(+1.0%, 量2.2x)扇形展開強確認</div>
+              <a href="cards/MAGICUSDT_20261103_2230.png" target="_blank">
+                <img src="cards/MAGICUSDT_20261103_2230.png" loading="lazy" alt="MAGICUSDT"/>
+              </a>
+            </div>
+            
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">MAGICUSDT</span>
+                  <span class="tag" style="background:#b71c1c;color:#fff;">★ 引擎A·底部爆量起漲</span>
+                  <span class="time">2026-10-09 14:30 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x: +3.7% ｜ 3x: +11.2% (+0.38R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.07301</b> ｜ 初始止損: <b>0.0657894</b> (風險 9.9%) ｜
+                出場: <b>0.07582</b> (破MA25止盈) ｜ <b>3x: +11.2% → 餘額 $26,704</b>
+              </div>
+              <div class="card-note">底部8線糾結(3.1%) + 箱體壓縮(3.0%) + 實體飽滿(85%) → 爆量 28.7x 長紅(+7.7%)突破起漲</div>
+              <a href="cards/MAGICUSDT_20261009_1430.png" target="_blank">
+                <img src="cards/MAGICUSDT_20261009_1430.png" loading="lazy" alt="MAGICUSDT"/>
+              </a>
+            </div>
+            
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">TRUMPUSDT</span>
+                  <span class="tag" style="background:#b71c1c;color:#fff;">★ 引擎A·底部爆量起漲</span>
+                  <span class="time">2026-09-03 19:15 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x: +0.3% ｜ 3x: +1.0% (+0.04R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>2.393</b> ｜ 初始止損: <b>2.19596</b> (風險 8.2%) ｜
+                出場: <b>2.404</b> (破MA25止盈) ｜ <b>3x: +1.0% → 餘額 $1,626</b>
+              </div>
+              <div class="card-note">底部8線糾結(2.0%) + 箱體壓縮(3.5%) + 實體飽滿(97%) → 爆量 12.7x 長紅(+4.9%)突破起漲</div>
+              <a href="cards/TRUMPUSDT_20260903_1915.png" target="_blank">
+                <img src="cards/TRUMPUSDT_20260903_1915.png" loading="lazy" alt="TRUMPUSDT"/>
+              </a>
+            </div>
+            
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">BEAMXUSDT</span>
+                  <span class="tag" style="background:#6a1b9a;color:#fff;">🐂 引擎B·牛來黏帶穿MA200二拍</span>
+                  <span class="time">2026-09-11 21:30 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x: +0.1% ｜ 3x: +0.4% (+0.03R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.001583</b> ｜ 初始止損: <b>0.001502</b> (風險 5.1%) ｜
+                出場: <b>0.00158696</b> (保本鎖利止盈) ｜ <b>3x: +0.4% → 餘額 $1,516</b>
+              </div>
+              <div class="card-note">牛來水下築底(156根) + 7線黏帶(0.73%) + 碗口(1.32%) → 第一拍 5.1x 穿MA200 + 第二拍(+1.3%, 量2.3x)扇形展開強確認</div>
+              <a href="cards/BEAMXUSDT_20260911_2130.png" target="_blank">
+                <img src="cards/BEAMXUSDT_20260911_2130.png" loading="lazy" alt="BEAMXUSDT"/>
+              </a>
+            </div>
+            
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">CYBERUSDT</span>
+                  <span class="tag" style="background:#6a1b9a;color:#fff;">🐂 引擎B·牛來黏帶穿MA200二拍</span>
+                  <span class="time">2026-10-08 17:30 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x: +0.1% ｜ 3x: +0.4% (+0.02R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.3304</b> ｜ 初始止損: <b>0.312352</b> (風險 5.5%) ｜
+                出場: <b>0.331226</b> (保本鎖利止盈) ｜ <b>3x: +0.4% → 餘額 $24,017</b>
+              </div>
+              <div class="card-note">牛來水下築底(124根) + 7線黏帶(0.92%) + 碗口(2.42%) → 第一拍 4.0x 穿MA200 + 第二拍(+1.3%, 量2.3x)扇形展開強確認</div>
+              <a href="cards/CYBERUSDT_20261008_1730.png" target="_blank">
+                <img src="cards/CYBERUSDT_20261008_1730.png" loading="lazy" alt="CYBERUSDT"/>
+              </a>
+            </div>
+            
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">NAORISUSDT</span>
+                  <span class="tag" style="background:#b71c1c;color:#fff;">★ 引擎A·底部爆量起漲</span>
+                  <span class="time">2026-10-16 13:30 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#00c853">
+                  1x: +0.2% ｜ 3x: +0.5% (+0.02R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.03063</b> ｜ 初始止損: <b>0.0280093</b> (風險 8.6%) ｜
+                出場: <b>0.0307219</b> (保本止盈) ｜ <b>3x: +0.5% → 餘額 $26,848</b>
+              </div>
+              <div class="card-note">底部8線糾結(2.1%) + 箱體壓縮(4.8%) + 實體飽滿(82%) → 爆量 15.6x 長紅(+4.3%)突破起漲</div>
+              <a href="cards/NAORISUSDT_20261016_1330.png" target="_blank">
+                <img src="cards/NAORISUSDT_20261016_1330.png" loading="lazy" alt="NAORISUSDT"/>
+              </a>
+            </div>
+            
+  </div>
+
+  <h2>📉 虧損交易復盤圖卡（共 2 筆）</h2>
+  <div class="grid">
+    
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">QUSDT</span>
+                  <span class="tag" style="background:#b71c1c;color:#fff;">★ 引擎A·底部爆量起漲</span>
+                  <span class="time">2026-09-07 23:00 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#ff5252">
+                  1x: -2.4% ｜ 3x: -7.2% (-0.25R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.029983</b> ｜ 初始止損: <b>0.0271396</b> (風險 9.5%) ｜
+                出場: <b>0.029304</b> (3K動能停滯減損) ｜ <b>3x: -7.2% → 餘額 $1,510</b>
+              </div>
+              <div class="card-note">底部8線糾結(2.2%) + 箱體壓縮(2.0%) + 實體飽滿(94%) → 爆量 24.5x 長紅(+8.6%)突破起漲</div>
+              <a href="cards/QUSDT_20260907_2300.png" target="_blank">
+                <img src="cards/QUSDT_20260907_2300.png" loading="lazy" alt="QUSDT"/>
+              </a>
+            </div>
+            
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <span class="sym">WLDUSDT</span>
+                  <span class="tag" style="background:#b71c1c;color:#fff;">★ 引擎A·底部爆量起漲</span>
+                  <span class="time">2026-10-16 16:30 TPE</span>
+                </div>
+                <div class="pnl-badge" style="background:#ff5252">
+                  1x: -2.3% ｜ 3x: -7.0% (-0.28R)
+                </div>
+              </div>
+              <div class="card-meta">
+                進場: <b>0.5347</b> ｜ 初始止損: <b>0.490137</b> (風險 8.3%) ｜
+                出場: <b>0.5228</b> (3K動能停滯減損) ｜ <b>持倉中重疊(跳過)</b>
+              </div>
+              <div class="card-note">底部8線糾結(2.8%) + 箱體壓縮(3.6%) + 實體飽滿(99%) → 爆量 13.6x 長紅(+5.0%)突破起漲</div>
+              <a href="cards/WLDUSDT_20261016_1630.png" target="_blank">
+                <img src="cards/WLDUSDT_20261016_1630.png" loading="lazy" alt="WLDUSDT"/>
+              </a>
+            </div>
+            
+  </div>
+
+  <h2>📋 過去 90 天完整交易明細表（共 15 筆，依時間由新到舊）</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th>進場時間 (TPE)</th><th>幣種</th><th>訊號類型</th>
+        <th>進場價</th><th>止損價 (風險)</th><th>出場價</th><th>出場原因</th>
+        <th>爆量倍數</th><th>1x現貨淨利</th><th>3x槓桿淨利</th><th>滾倉後餘額</th><th>盈虧比 (R)</th>
+      </tr>
+    </thead>
+    <tbody>
+      
+            <tr>
+              <td>1</td>
+              <td>2026-11-13 23:30</td>
+              <td><b>SHELLUSDT</b></td>
+              <td>★ 引擎A·底部起漲</td>
+              <td>0.02134</td>
+              <td>0.019303 (9.5%)</td>
+              <td>0.03581</td>
+              <td>破MA25止盈</td>
+              <td>21.4x</td>
+              <td class="pos"><b>+67.7%</b></td>
+              <td class="pos"><b>重疊跳過</b></td>
+              <td><b>($1,163,718.92)</b></td>
+              <td class="pos"><b>+7.09R</b></td>
+            </tr>
+            
+            <tr>
+              <td>2</td>
+              <td>2026-11-13 13:15</td>
+              <td><b>AKEUSDT</b></td>
+              <td>★ 引擎A·底部起漲</td>
+              <td>0.002847</td>
+              <td>0.00255118 (10.4%)</td>
+              <td>0.010857</td>
+              <td>破MA25止盈</td>
+              <td>11.7x</td>
+              <td class="pos"><b>+281.2%</b></td>
+              <td class="pos"><b>+843.7%</b></td>
+              <td><b>$1,163,718.92</b></td>
+              <td class="pos"><b>+27.07R</b></td>
+            </tr>
+            
+            <tr>
+              <td>3</td>
+              <td>2026-11-03 23:30</td>
+              <td><b>POLUSDT</b></td>
+              <td>🐂 引擎B·牛來二拍</td>
+              <td>0.09176</td>
+              <td>0.08714 (5.0%)</td>
+              <td>0.09571</td>
+              <td>破MA99(1H MA25)止盈</td>
+              <td>3.4x</td>
+              <td class="pos"><b>+4.2%</b></td>
+              <td class="pos"><b>重疊跳過</b></td>
+              <td><b>($123,316.28)</b></td>
+              <td class="pos"><b>+0.83R</b></td>
+            </tr>
+            
+            <tr>
+              <td>4</td>
+              <td>2026-11-03 22:30</td>
+              <td><b>MAGICUSDT</b></td>
+              <td>🐂 引擎B·牛來二拍</td>
+              <td>0.08172</td>
+              <td>0.0774668 (5.2%)</td>
+              <td>0.08443</td>
+              <td>破MA99(1H MA25)止盈</td>
+              <td>3.9x</td>
+              <td class="pos"><b>+3.2%</b></td>
+              <td class="pos"><b>+9.6%</b></td>
+              <td><b>$123,316.28</b></td>
+              <td class="pos"><b>+0.61R</b></td>
+            </tr>
+            
+            <tr>
+              <td>5</td>
+              <td>2026-10-31 17:45</td>
+              <td><b>ESPORTSUSDT</b></td>
+              <td>🐂 引擎B·牛來二拍</td>
+              <td>0.007515</td>
+              <td>0.00705276 (6.2%)</td>
+              <td>0.015518</td>
+              <td>破MA99(1H MA25)止盈</td>
+              <td>5.3x</td>
+              <td class="pos"><b>+106.4%</b></td>
+              <td class="pos"><b>+319.1%</b></td>
+              <td><b>$112,526.55</b></td>
+              <td class="pos"><b>+17.29R</b></td>
+            </tr>
+            
+            <tr>
+              <td>6</td>
+              <td>2026-10-16 16:30</td>
+              <td><b>WLDUSDT</b></td>
+              <td>★ 引擎A·底部起漲</td>
+              <td>0.5347</td>
+              <td>0.490137 (8.3%)</td>
+              <td>0.5228</td>
+              <td>3K動能停滯減損</td>
+              <td>13.6x</td>
+              <td class="neg"><b>-2.3%</b></td>
+              <td class="neg"><b>重疊跳過</b></td>
+              <td><b>($26,848.22)</b></td>
+              <td class="neg"><b>-0.28R</b></td>
+            </tr>
+            
+            <tr>
+              <td>7</td>
+              <td>2026-10-16 13:30</td>
+              <td><b>NAORISUSDT</b></td>
+              <td>★ 引擎A·底部起漲</td>
+              <td>0.03063</td>
+              <td>0.0280093 (8.6%)</td>
+              <td>0.0307219</td>
+              <td>保本止盈</td>
+              <td>15.6x</td>
+              <td class="pos"><b>+0.2%</b></td>
+              <td class="pos"><b>+0.5%</b></td>
+              <td><b>$26,848.22</b></td>
+              <td class="pos"><b>+0.02R</b></td>
+            </tr>
+            
+            <tr>
+              <td>8</td>
+              <td>2026-10-09 14:30</td>
+              <td><b>MAGICUSDT</b></td>
+              <td>★ 引擎A·底部起漲</td>
+              <td>0.07301</td>
+              <td>0.0657894 (9.9%)</td>
+              <td>0.07582</td>
+              <td>破MA25止盈</td>
+              <td>28.7x</td>
+              <td class="pos"><b>+3.7%</b></td>
+              <td class="pos"><b>+11.2%</b></td>
+              <td><b>$26,704.02</b></td>
+              <td class="pos"><b>+0.38R</b></td>
+            </tr>
+            
+            <tr>
+              <td>9</td>
+              <td>2026-10-08 17:30</td>
+              <td><b>CYBERUSDT</b></td>
+              <td>🐂 引擎B·牛來二拍</td>
+              <td>0.3304</td>
+              <td>0.312352 (5.5%)</td>
+              <td>0.331226</td>
+              <td>保本鎖利止盈</td>
+              <td>4.0x</td>
+              <td class="pos"><b>+0.1%</b></td>
+              <td class="pos"><b>+0.4%</b></td>
+              <td><b>$24,017.35</b></td>
+              <td class="pos"><b>+0.02R</b></td>
+            </tr>
+            
+            <tr>
+              <td>10</td>
+              <td>2026-10-05 10:45</td>
+              <td><b>RLCUSDT</b></td>
+              <td>🐂 引擎B·牛來二拍</td>
+              <td>0.3855</td>
+              <td>0.362213 (6.0%)</td>
+              <td>0.7787</td>
+              <td>破MA99(1H MA25)止盈</td>
+              <td>5.4x</td>
+              <td class="pos"><b>+101.9%</b></td>
+              <td class="pos"><b>+305.6%</b></td>
+              <td><b>$23,924.05</b></td>
+              <td class="pos"><b>+16.87R</b></td>
+            </tr>
+            
+            <tr>
+              <td>11</td>
+              <td>2026-10-03 22:00</td>
+              <td><b>AINUSDT</b></td>
+              <td>★ 引擎A·底部起漲</td>
+              <td>0.02474</td>
+              <td>0.0229845 (7.1%)</td>
+              <td>0.04861</td>
+              <td>破MA25止盈</td>
+              <td>30.5x</td>
+              <td class="pos"><b>+96.4%</b></td>
+              <td class="pos"><b>+289.1%</b></td>
+              <td><b>$5,897.97</b></td>
+              <td class="pos"><b>+13.58R</b></td>
+            </tr>
+            
+            <tr>
+              <td>12</td>
+              <td>2026-09-11 21:30</td>
+              <td><b>BEAMXUSDT</b></td>
+              <td>🐂 引擎B·牛來二拍</td>
+              <td>0.001583</td>
+              <td>0.001502 (5.1%)</td>
+              <td>0.00158696</td>
+              <td>保本鎖利止盈</td>
+              <td>5.1x</td>
+              <td class="pos"><b>+0.1%</b></td>
+              <td class="pos"><b>+0.4%</b></td>
+              <td><b>$1,515.83</b></td>
+              <td class="pos"><b>+0.03R</b></td>
+            </tr>
+            
+            <tr>
+              <td>13</td>
+              <td>2026-09-07 23:00</td>
+              <td><b>QUSDT</b></td>
+              <td>★ 引擎A·底部起漲</td>
+              <td>0.029983</td>
+              <td>0.0271396 (9.5%)</td>
+              <td>0.029304</td>
+              <td>3K動能停滯減損</td>
+              <td>24.5x</td>
+              <td class="neg"><b>-2.4%</b></td>
+              <td class="neg"><b>-7.2%</b></td>
+              <td><b>$1,509.95</b></td>
+              <td class="neg"><b>-0.25R</b></td>
+            </tr>
+            
+            <tr>
+              <td>14</td>
+              <td>2026-09-03 19:15</td>
+              <td><b>TRUMPUSDT</b></td>
+              <td>★ 引擎A·底部起漲</td>
+              <td>2.393</td>
+              <td>2.19596 (8.2%)</td>
+              <td>2.404</td>
+              <td>破MA25止盈</td>
+              <td>12.7x</td>
+              <td class="pos"><b>+0.3%</b></td>
+              <td class="pos"><b>+1.0%</b></td>
+              <td><b>$1,626.29</b></td>
+              <td class="pos"><b>+0.04R</b></td>
+            </tr>
+            
+            <tr>
+              <td>15</td>
+              <td>2026-08-19 23:00</td>
+              <td><b>ARKMUSDT</b></td>
+              <td>🐂 引擎B·牛來二拍</td>
+              <td>0.089</td>
+              <td>0.0862 (3.1%)</td>
+              <td>0.1072</td>
+              <td>破MA99(1H MA25)止盈</td>
+              <td>3.1x</td>
+              <td class="pos"><b>+20.3%</b></td>
+              <td class="pos"><b>+61.0%</b></td>
+              <td><b>$1,609.88</b></td>
+              <td class="pos"><b>+6.46R</b></td>
+            </tr>
+            
+    </tbody>
+  </table>
+</div>
+</body>
+</html>

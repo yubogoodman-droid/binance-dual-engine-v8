@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>幣安永續 v8 雙引擎合體版 — 全市場回測戰績看板</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 40px 20px; display: flex; justify-content: center; }
+    .box { max-width: 760px; width: 100%; background: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 32px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); }
+    h1 { margin: 0 0 10px; font-size: 26px; color: #f8fafc; }
+    p { color: #94a3b8; line-height: 1.6; }
+    .links { display: grid; gap: 16px; margin-top: 24px; }
+    a.btn { display: block; text-decoration: none; background: #0f172a; border: 1px solid #38bdf8; border-radius: 12px; padding: 18px 20px; color: #f8fafc; transition: transform .15s, background .15s; }
+    a.btn:hover { background: #0c4a6e; transform: translateY(-2px); }
+    .title { font-size: 18px; font-weight: 700; color: #38bdf8; margin-bottom: 6px; }
+    .desc { font-size: 13.5px; color: #cbd5e1; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>🚀 幣安永續合約「v8 雙引擎合體版」戰績看板</h1>
+    <p>針對 <b>174 檔純加密貨幣 USDT 永續合約</b> 進行 15m 週期全市場無差別實盤級回測（已扣 0.12% 來回手續費與滑價）。</p>
+    <div class="links">
+      <a class="btn" href="./breakout_output/backtest_365d/index.html">
+        <div class="title">📊 過去 365 天全市場 174 檔回測看板</div>
+        <div class="desc">34 筆訊號（引擎A 20筆 + 引擎B 14筆）｜ 勝率 82.4% ｜ PF 51.84 ｜ 固定3x單利 $29,713</div>
+      </a>
+      <a class="btn" href="./breakout_output/backtest_90d/index.html">
+        <div class="title">📊 過去 90 天全市場 174 檔回測看板</div>
+        <div class="desc">15 筆訊號（引擎A 8筆 + 引擎B 7筆）｜ 勝率 86.7% ｜ PF 169.44 ｜ 固定3x單利 $21,431</div>
+      </a>
+    </div>
+  </div>
+</body>
+</html>
