@@ -21,18 +21,18 @@
     <h1>🛡️ 幣安永續合約「結構雙引擎二拍突破（去過擬合・零前視偏差修正版）」戰績看板</h1>
     <p>
       針對 <b>174 檔純加密貨幣 USDT 永續合約</b> 進行 15m 週期嚴格實盤級回測：<br/>
-      ✔ 移除 60+ 個小數點湊參數與寫死妖幣，統一改為 <b>水上高台二拍 (引擎A) ＋ 水下穿 MA200 二拍 (引擎B)</b> 0% 重疊對稱結構<br/>
-      ✔ 訊號當下強制驗證 <b>前 24h 真實滾動成交額 &ge; $5M</b>，杜絕事後低流動性妖幣存活者偏差<br/>
-      ✔ 扣除 <b>0.24% 來回手續費與滑價 ＋ 每 8h 資金費率 0.01% ＋ 止損開盤跳空滑價 ＋ 收盤站上 +1.5R 次根才啟動保本</b>（杜絕同根幽靈保本）
+      ✔ 移除 60+ 個小數點湊參數與寫死妖幣，統一改為 <b>水上高台過前高二拍 (引擎A) ＋ 水下穿 MA200 二拍 (引擎B)</b> 並限制二拍量能 &le; 10x 排除天量爆衝頂<br/>
+      ✔ 訊號當下強制驗證 <b>前 24h 真實滾動成交額 &ge; $5M</b> 與 <b>BTC 站穩 MA25 共振</b>，杜絕逆勢假突破與存活者偏差<br/>
+      ✔ 扣除 <b>0.24% 來回手續費與滑價 ＋ 每 8h 資金費率 0.01% ＋ 止損開盤跳空滑價 ＋ 收盤站上 +1.5R 次根才啟動保本</b>
     </p>
     <div class="links">
       <a class="btn" href="https://htmlpreview.github.io/?https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_365d/view.html">
         <div class="title">📊 過去 365 天全市場 174 檔回測看板（含跨期穩健度拆解）</div>
-        <div class="desc">300 筆合格訊號（引擎A 248筆 + 引擎B 52筆）｜ 累積 +90.4R ｜ PF 1.55（扣前2極端值 PF 1.22）｜ 1.5%R 分倉 $1,853 (+85.3%, MDD -22.4%) vs 原版全倉3x滾倉 $139 (-86.1%)</div>
+        <div class="desc">203 筆合格訊號（引擎A 162筆 + 引擎B 41筆）｜ 累積 +92.4R ｜ PF 1.86（扣前2極端值 PF 1.35）｜ 1.5%R 分倉 $2,482 (+148.2%, MDD -13.1%)</div>
       </a>
       <a class="btn" href="https://htmlpreview.github.io/?https://raw.githubusercontent.com/yubogoodman-droid/binance-dual-engine-v8/cursor/fix-dual-engine-v8-f092/breakout_output/backtest_90d/view.html">
         <div class="title">📊 過去 90 天全市場 174 檔回測看板</div>
-        <div class="desc">94 筆合格訊號（引擎A 79筆 + 引擎B 15筆）｜ 累積 +46.7R ｜ PF 1.88（扣前2極端值 PF 1.45）｜ 1.5%R 分倉 $1,307 (+30.7%, MDD -22.4%) vs 原版全倉3x滾倉 $377 (-62.3%)</div>
+        <div class="desc">63 筆合格訊號（引擎A 52筆 + 引擎B 11筆）｜ 累積 +44.7R ｜ PF 2.32（扣前2極端值 PF 1.65）｜ 1.5%R 分倉 $1,612 (+61.2%, MDD -12.9%)</div>
       </a>
     </div>
   </div>
