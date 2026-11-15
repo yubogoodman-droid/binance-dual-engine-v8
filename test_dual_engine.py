@@ -173,6 +173,35 @@ class DualEngineAuditFixesTest(unittest.TestCase):
         clustered = scanner.filter_and_rank_signals([s_alpha, s_zulu, s_mid], max_same_bar_signals=2)
         self.assertEqual(len(clustered), 0)
 
+    def test_beat2_climax_volume_is_rejected(self) -> None:
+        """第二拍若爆出 >10x 天量（如 16x~24x 趕頂針），必須攔截不追高。"""
+        n = 320
+        t0 = datetime(2026, 10, 1, 0, 0, tzinfo=TPE)
+        idx = [t0 + timedelta(minutes=15 * k) for k in range(n)]
+        closes = np.full(n, 10.20)
+        closes[200:295] = 9.95
+        closes[295] = 10.12
+        closes[296] = 10.28
+        opens = closes.copy()
+        opens[295] = 9.95
+        opens[296] = 10.12
+        highs = np.maximum(opens, closes) * 1.001
+        lows = np.minimum(opens, closes) * 0.998
+        vols = np.full(n, 20_000.0)
+        vols[295] = 80_000.0    # 第一拍 4x
+        vols[296] = 400_000.0   # 第二拍約 18x (>10x 天量衰竭)
+        qvs = closes * vols
+
+        df = pd.DataFrame(
+            {"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols, "QuoteVolume": qvs},
+            index=pd.DatetimeIndex(idx),
+        )
+        df = scanner.enrich_indicators(df, "15m")
+        sigs_capped = scanner.detect_coiled_ma200_signals(df, "CLIMAXUSDT", "15m")
+        sigs_uncapped = scanner.detect_coiled_ma200_signals(df, "CLIMAXUSDT", "15m", follow_max_vol_ratio=99.0)
+        self.assertEqual(len(sigs_capped), 0)
+        self.assertEqual(len(sigs_uncapped), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -417,7 +417,7 @@ def plot_single_trade_card(df: pd.DataFrame, tr: TradeResult, out_path: Path) ->
 
     is_coiled = tr.signal_type == "COILED_MA200_STAGE2"
     left = max(0, tr.entry_idx - 55)
-    right = min(len(df) - 1, min(tr.entry_idx + 145, tr.exit_idx + 20))
+    right = min(len(df) - 1, tr.exit_idx + 18)
     sub = df.iloc[left : right + 1].copy()
     if sub.empty:
         return

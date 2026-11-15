@@ -272,19 +272,20 @@ def fetch_klines(
 
 
 def build_btc_regime_map(btc_df: pd.DataFrame) -> Dict[datetime, bool]:
-    """建立零前視偏差的 BTCUSDT 大盤安全濾網：排除 BTC 跌破 MA99 -1% 且短線急殺的崩盤時段。"""
-    if btc_df is None or btc_df.empty or "MA99" not in btc_df.columns:
+    """建立零前視偏差的 BTCUSDT 大盤共振濾網：確認 BTC 收盤站穩 MA25 與 MA99 支撐且無 4h 急殺。"""
+    if btc_df is None or btc_df.empty or "MA99" not in btc_df.columns or "MA25" not in btc_df.columns:
         return {}
     closes = btc_df["Close"].to_numpy(float)
+    ma25 = btc_df["MA25"].to_numpy(float)
     ma99 = btc_df["MA99"].to_numpy(float)
     ts = btc_df.index
     safe_map: Dict[datetime, bool] = {}
     for i in range(len(closes)):
-        if i < 16 or not np.isfinite(ma99[i]) or ma99[i] <= 0 or closes[i - 16] <= 0:
+        if i < 16 or not np.isfinite(ma99[i]) or not np.isfinite(ma25[i]) or ma99[i] <= 0 or closes[i - 16] <= 0:
             safe_map[ts[i]] = True
             continue
         chg_16 = (closes[i] / closes[i - 16] - 1.0) * 100.0
-        safe_map[ts[i]] = bool(closes[i] >= ma99[i] * 0.99 and chg_16 >= -1.5)
+        safe_map[ts[i]] = bool(closes[i] >= ma25[i] and closes[i] >= ma99[i] * 0.99 and chg_16 >= -1.5)
     return safe_map
 
 
@@ -345,7 +346,9 @@ def detect_signals(
     min_clv: float = 0.70,
     follow_max_bars: int = 4,
     follow_min_vol_ratio: float = 2.0,
+    follow_max_vol_ratio: float = 10.0,
     follow_min_bar_gain_pct: float = 1.0,
+    overhead_lookback_bars: int = 60,
     min_quote_vol_24h: float = DEFAULT_MIN_QUOTE_VOL,
     cooldown_bars: int = 24,
 ) -> List[BreakoutSignal]:
@@ -409,7 +412,8 @@ def detect_signals(
 
         stop_price = float(min(box_low, m[120][i]) * 0.998)
 
-        # 4. 第二拍確認（1~4 根內不破 MA25，放量再創收盤新高）
+        # 4. 第二拍確認（1~4 根內不破 MA25，溫和放量 2x~10x 突破前 60 根高點，拒絕追高天量衰竭針）
+        overhead_high = float(np.max(h[max(0, i - overhead_lookback_bars) : i]))
         for j in range(i + 1, min(n_bars, i + follow_max_bars + 1)):
             if not np.isfinite(m[25][j]) or c[j] < m[25][j]:
                 break
@@ -417,7 +421,7 @@ def detect_signals(
             if min_quote_vol_24h > 0 and qv_j < min_quote_vol_24h:
                 continue
             vr_j = float(vr[j]) if np.isfinite(vr[j]) else 0.0
-            if not (c[j] > o[j] and c[j] > c[i] and vr_j >= follow_min_vol_ratio):
+            if not (c[j] > o[j] and c[j] > c[i] and c[j] >= overhead_high and follow_min_vol_ratio <= vr_j <= follow_max_vol_ratio):
                 continue
             clv_j = float((c[j] - l[j]) / max(h[j] - l[j], 1e-12))
             gain_j = float((c[j] / max(o[j], 1e-12) - 1.0) * 100.0)
@@ -480,6 +484,7 @@ def detect_coiled_ma200_signals(
     min_clv: float = 0.70,
     follow_max_bars: int = 4,
     follow_min_vol_ratio: float = 2.0,
+    follow_max_vol_ratio: float = 10.0,
     follow_min_bar_gain_pct: float = 1.0,
     min_quote_vol_24h: float = DEFAULT_MIN_QUOTE_VOL,
     cooldown_bars: int = 24,
@@ -546,7 +551,7 @@ def detect_coiled_ma200_signals(
 
         stop_price = float(min(m[60][i], m[99][i], m[120][i], float(np.min(l[max(0, i - 3) : i + 1]))))
 
-        # 4. 第二拍確認（1~4 根內穩守 MA200 之上，放量紅 K >=1% 再創收盤新高）
+        # 4. 第二拍確認（1~4 根內穩守 MA200 之上，2x~10x 溫和放量紅 K >=1% 確認，過濾 >10x 天量頂部爆衝）
         for j in range(i + 1, min(n_bars, i + follow_max_bars + 1)):
             if not np.isfinite(m[200][j]) or c[j] <= m[200][j]:
                 break
@@ -554,7 +559,7 @@ def detect_coiled_ma200_signals(
             if min_quote_vol_24h > 0 and qv_j < min_quote_vol_24h:
                 continue
             vr_j = float(vr[j]) if np.isfinite(vr[j]) else 0.0
-            if not (c[j] > o[j] and c[j] > c[i] and vr_j >= follow_min_vol_ratio):
+            if not (c[j] > o[j] and c[j] > c[i] and follow_min_vol_ratio <= vr_j <= follow_max_vol_ratio):
                 continue
             clv_j = float((c[j] - l[j]) / max(h[j] - l[j], 1e-12))
             gain_j = float((c[j] / max(o[j], 1e-12) - 1.0) * 100.0)
