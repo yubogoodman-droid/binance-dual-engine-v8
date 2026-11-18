@@ -3,31 +3,36 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>幣安永續 v8 雙引擎合體版 — 全市場回測戰績看板</title>
+  <title>幣安永續「結構雙引擎二拍突破（去過擬合・零前視偏差版）」全市場回測看板</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 40px 20px; display: flex; justify-content: center; }
-    .box { max-width: 760px; width: 100%; background: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 32px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); }
-    h1 { margin: 0 0 10px; font-size: 26px; color: #f8fafc; }
-    p { color: #94a3b8; line-height: 1.6; }
+    .box { max-width: 820px; width: 100%; background: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 32px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); }
+    h1 { margin: 0 0 10px; font-size: 25px; color: #f8fafc; }
+    p { color: #94a3b8; line-height: 1.65; font-size: 14.5px; }
     .links { display: grid; gap: 16px; margin-top: 24px; }
     a.btn { display: block; text-decoration: none; background: #0f172a; border: 1px solid #38bdf8; border-radius: 12px; padding: 18px 20px; color: #f8fafc; transition: transform .15s, background .15s; }
     a.btn:hover { background: #0c4a6e; transform: translateY(-2px); }
     .title { font-size: 18px; font-weight: 700; color: #38bdf8; margin-bottom: 6px; }
-    .desc { font-size: 13.5px; color: #cbd5e1; }
+    .desc { font-size: 13.5px; color: #cbd5e1; line-height: 1.5; }
   </style>
 </head>
 <body>
   <div class="box">
-    <h1>🚀 幣安永續合約「v8 雙引擎合體版」戰績看板</h1>
-    <p>針對 <b>174 檔純加密貨幣 USDT 永續合約</b> 進行 15m 週期全市場無差別實盤級回測（已扣 0.12% 來回手續費與滑價）。</p>
+    <h1>🛡️ 幣安永續合約「結構雙引擎二拍突破（去過擬合・零前視偏差修正版）」戰績看板</h1>
+    <p>
+      針對 <b>174 檔純加密貨幣 USDT 永續合約</b> 進行 15m 週期嚴格實盤級回測：<br/>
+      ✔ 移除 60+ 個小數點湊參數與寫死妖幣，統一改為 <b>水上高台過前高二拍 (引擎A) ＋ 水下穿 MA200 二拍 (引擎B)</b> 並限制二拍量能 &le; 10x 排除天量爆衝頂<br/>
+      ✔ 訊號當下強制驗證 <b>前 24h 真實滾動成交額 &ge; $5M</b> 與 <b>BTC 站穩 MA25 共振</b>，杜絕逆勢假突破與存活者偏差<br/>
+      ✔ 扣除 <b>0.24% 來回手續費與滑價 ＋ 每 8h 資金費率 0.01% ＋ 止損開盤跳空滑價 ＋ 收盤站上 +1.5R 次根才啟動保本</b>
+    </p>
     <div class="links">
       <a class="btn" href="./breakout_output/backtest_365d/index.html">
-        <div class="title">📊 過去 365 天全市場 174 檔回測看板</div>
-        <div class="desc">34 筆訊號（引擎A 20筆 + 引擎B 14筆）｜ 勝率 82.4% ｜ PF 51.84 ｜ 固定3x單利 $29,713</div>
+        <div class="title">📊 過去 365 天全市場 174 檔回測看板（含跨期穩健度拆解）</div>
+        <div class="desc">203 筆合格訊號（引擎A 162筆 + 引擎B 41筆）｜ 累積 +92.4R ｜ PF 1.86（扣前2極端值 PF 1.35）｜ 1.5%R 分倉 $2,482 (+148.2%, MDD -13.1%)</div>
       </a>
       <a class="btn" href="./breakout_output/backtest_90d/index.html">
         <div class="title">📊 過去 90 天全市場 174 檔回測看板</div>
-        <div class="desc">15 筆訊號（引擎A 8筆 + 引擎B 7筆）｜ 勝率 86.7% ｜ PF 169.44 ｜ 固定3x單利 $21,431</div>
+        <div class="desc">63 筆合格訊號（引擎A 52筆 + 引擎B 11筆）｜ 累積 +44.7R ｜ PF 2.32（扣前2極端值 PF 1.65）｜ 1.5%R 分倉 $1,612 (+61.2%, MDD -12.9%)</div>
       </a>
     </div>
   </div>
