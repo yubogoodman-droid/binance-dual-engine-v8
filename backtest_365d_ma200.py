@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+import backtest_utils as bt_utils
 import ma200_coil_scanner as scanner
 
 
@@ -50,23 +51,20 @@ class VariantReport:
     port_1slot: Dict[str, Any]
     port_2slot: Dict[str, Any]
     stats: Dict[str, Any]
+    oos_report: Optional[Dict[str, Any]] = None
 
 
 def _load_cached_market(cache_dir: Path) -> Tuple[Dict[str, pd.DataFrame], str, str]:
-    """讀取本地 365d pickle 快取並一次性計算全市場技術指標。"""
-    files = sorted(cache_dir.glob("*.pkl"))
-    if not files:
+    """讀取本地 pickle 快取並一次性計算全市場技術指標（不按字母截斷）。"""
+    raw_map = bt_utils.load_cached_frames([cache_dir], interval="15m", excluded_symbols=scanner.EXCLUDED_SYMBOLS)
+    if not raw_map:
         raise FileNotFoundError(f"找不到快取檔案: {cache_dir}")
 
     dfs: Dict[str, pd.DataFrame] = {}
     min_ts: Optional[pd.Timestamp] = None
     max_ts: Optional[pd.Timestamp] = None
 
-    for path in files:
-        sym = path.name.split("_")[0]
-        if sym in scanner.EXCLUDED_SYMBOLS:
-            continue
-        raw = pd.read_pickle(path)
+    for sym, raw in sorted(raw_map.items()):
         if raw.empty:
             continue
         df = scanner.compute_indicators(raw)
@@ -83,15 +81,16 @@ def _load_cached_market(cache_dir: Path) -> Tuple[Dict[str, pd.DataFrame], str, 
 def _calc_split_stats(
     sigs: Sequence[scanner.MA200CoilSignal],
     exit_map: Dict[Tuple[str, datetime], Dict[str, Any]],
+    split_cutoff: pd.Timestamp = SPLIT_CUTOFF,
 ) -> Dict[str, Any]:
-    """計算整體與 H1/H2 半年度樣本外切片統計。"""
+    """計算整體與樣本內(IS) / 樣本外(OOS)切片統計。"""
     if not sigs:
-        empty = {"n": 0, "wr": 0.0, "avg_pnl": 0.0, "avg_r": 0.0, "sum_r": 0.0, "pf": 0.0}
+        empty = {"n": 0, "wr": 0.0, "avg_pnl": 0.0, "sum_pnl": 0.0, "avg_r": 0.0, "sum_r": 0.0, "pf": 0.0}
         return {**empty, "max_streak": 0, "avg_hold_h": 0.0, "h1": empty, "h2": empty}
 
     def _agg(subset: Sequence[scanner.MA200CoilSignal]) -> Dict[str, Any]:
         if not subset:
-            return {"n": 0, "wr": 0.0, "avg_pnl": 0.0, "avg_r": 0.0, "sum_r": 0.0, "pf": 0.0}
+            return {"n": 0, "wr": 0.0, "avg_pnl": 0.0, "sum_pnl": 0.0, "avg_r": 0.0, "sum_r": 0.0, "pf": 0.0}
         pnls = np.array([exit_map[(s.symbol, s.timestamp)]["pnl_pct"] for s in subset], dtype=float)
         rs = np.array([exit_map[(s.symbol, s.timestamp)]["r_mult"] for s in subset], dtype=float)
         gp = float(np.sum(pnls[pnls > 0]))
@@ -100,6 +99,7 @@ def _calc_split_stats(
             "n": len(subset),
             "wr": float(np.mean(pnls > 0) * 100.0),
             "avg_pnl": float(np.mean(pnls)),
+            "sum_pnl": float(np.sum(pnls)),
             "avg_r": float(np.mean(rs)),
             "sum_r": float(np.sum(rs)),
             "pf": gp / gl if gl > 0 else 99.9,
@@ -118,8 +118,8 @@ def _calc_split_stats(
         else:
             streak = 0
 
-    h1_sigs = [s for s in sigs if pd.Timestamp(s.timestamp) < SPLIT_CUTOFF]
-    h2_sigs = [s for s in sigs if pd.Timestamp(s.timestamp) >= SPLIT_CUTOFF]
+    h1_sigs = [s for s in sigs if pd.Timestamp(s.timestamp) < split_cutoff]
+    h2_sigs = [s for s in sigs if pd.Timestamp(s.timestamp) >= split_cutoff]
     return {
         **overall,
         "max_streak": max_streak,
@@ -133,14 +133,26 @@ def _run_variant(
     dfs: Dict[str, pd.DataFrame],
     key: str,
     title: str,
+    pit_index: bt_utils.PointInTimeVolumeIndex,
+    funding_store: bt_utils.FundingRateStore,
+    window_start: pd.Timestamp,
+    window_end: pd.Timestamp,
     preset_override: Optional[Dict[str, float]] = None,
     preset_name: str = "sniper",
     max_hold_bars: int = 288,
     arm_r: float = 1.2,
     scratch_bars: int = 0,
     fee_pct: float = 0.12,
+    min_vol_usd: float = 1_000_000.0,
+    top_n: int = 0,
+    risk_pct: float = 2.0,
+    oos_date: str = "",
+    oos_ratio: float = 0.50,
+    wf_folds: int = 4,
+    apply_liquidity_cap: bool = True,
+    max_bar_vol_share: float = 0.02,
 ) -> VariantReport:
-    """執行單一策略參數設定的全市場 365 天掃描與雙軌資金模擬。"""
+    """執行單一策略參數設定的全市場無偏誤掃描、資金費率扣除與誠實資金模擬。"""
     orig = copy.deepcopy(scanner.PRESETS[preset_name])
     if preset_override is not None:
         scanner.PRESETS[preset_name].update(preset_override)
@@ -148,8 +160,13 @@ def _run_variant(
     sigs: List[scanner.MA200CoilSignal] = []
     exit_map: Dict[Tuple[str, datetime], Dict[str, Any]] = {}
     try:
-        for sym, df in dfs.items():
+        for sym, df in sorted(dfs.items()):
             for s in scanner.detect_ma200_coil_breakouts(df, sym, interval="15m", preset=preset_name):
+                ok_vol, qv24, _ = pit_index.check_eligibility(
+                    sym, s.timestamp, min_quote_vol=min_vol_usd, top_n=top_n
+                )
+                if not ok_vol:
+                    continue
                 sim = scanner.simulate_ma99_trade(
                     df,
                     s,
@@ -157,6 +174,8 @@ def _run_variant(
                     arm_r=arm_r,
                     scratch_bars=scratch_bars,
                     fee_roundtrip_pct=fee_pct,
+                    funding_store=funding_store,
+                    trailing_24h_qv_usd=qv24,
                 )
                 if sim is not None:
                     sigs.append(s)
@@ -165,9 +184,53 @@ def _run_variant(
         scanner.PRESETS[preset_name].update(orig)
 
     sigs.sort(key=lambda s: s.timestamp)
-    port_1 = scanner.simulate_portfolio(sigs, exit_map, max_slots=1)
-    port_2 = scanner.simulate_portfolio(sigs, exit_map, max_slots=2)
-    stats = _calc_split_stats(sigs, exit_map)
+    port_1 = scanner.simulate_portfolio(
+        sigs,
+        exit_map,
+        risk_pct_per_trade=risk_pct,
+        max_slots=1,
+        apply_liquidity_cap=apply_liquidity_cap,
+        max_bar_vol_share=max_bar_vol_share,
+    )
+    port_2 = scanner.simulate_portfolio(
+        sigs,
+        exit_map,
+        risk_pct_per_trade=risk_pct,
+        max_slots=2,
+        apply_liquidity_cap=apply_liquidity_cap,
+        max_bar_vol_share=max_bar_vol_share,
+    )
+
+    inputs = [
+        bt_utils.PortfolioTradeInput(
+            symbol=s.symbol,
+            entry_time=s.timestamp,
+            exit_time=exit_map[(s.symbol, s.timestamp)]["exit_time"],
+            entry_price=s.entry_price,
+            stop_price=s.stop_price,
+            exit_price=exit_map[(s.symbol, s.timestamp)]["exit_price"],
+            risk_pct=s.risk_pct,
+            net_pnl_pct=exit_map[(s.symbol, s.timestamp)]["pnl_pct"],
+            r_mult=exit_map[(s.symbol, s.timestamp)]["r_mult"],
+            worst_low_price=exit_map[(s.symbol, s.timestamp)]["worst_low_price"],
+            bar_quote_vol_usd=exit_map[(s.symbol, s.timestamp)]["bar_quote_vol_usd"],
+            trailing_24h_qv_usd=exit_map[(s.symbol, s.timestamp)]["trailing_24h_qv_usd"],
+            funding_cost_pct=exit_map[(s.symbol, s.timestamp)]["funding_cost_pct"],
+            priority=float(s.score),
+        )
+        for s in sigs
+    ]
+    oos_report = bt_utils.compute_oos_and_walkforward(
+        inputs,
+        window_start=window_start.to_pydatetime(),
+        window_end=window_end.to_pydatetime(),
+        oos_split_date=oos_date,
+        oos_ratio=oos_ratio,
+        wf_folds=wf_folds,
+        risk_pct_per_trade=risk_pct,
+        max_positions=2,
+    )
+    stats = _calc_split_stats(sigs, exit_map, split_cutoff=oos_report["split_ts"])
     return VariantReport(
         key=key,
         title=title,
@@ -176,6 +239,7 @@ def _run_variant(
         port_1slot=port_1,
         port_2slot=port_2,
         stats=stats,
+        oos_report=oos_report,
     )
 
 
@@ -183,16 +247,13 @@ def _date_curve_points(
     port: Dict[str, Any],
     start_ts: pd.Timestamp,
 ) -> Tuple[List[pd.Timestamp], List[float], List[float]]:
-    """將實戰成交明細轉換成按平倉時間軸繪製的複利與 2% 以損定倉淨值序列。"""
-    xs: List[pd.Timestamp] = [start_ts]
-    ys_comp: List[float] = [float(port["initial_cap"])]
-
-    items = sorted(port["executed_items"], key=lambda item: item[1]["exit_time"])
-    for _, ex, _, tot_comp in items:
-        xs.append(pd.Timestamp(ex["exit_time"]))
-        ys_comp.append(float(tot_comp))
-
-    ys_risk2 = list(port["curve_risk2"])
+    """取出按平倉時間軸排列的 2% 以損定倉淨值序列與 3x 理論對照序列。"""
+    if port.get("curve_risk2_times") and len(port["curve_risk2_times"]) == len(port["curve_risk2"]):
+        xs = [pd.Timestamp(t) for t in port["curve_risk2_times"]]
+    else:
+        xs = [start_ts]
+    ys_risk2 = [float(v) for v in port["curve_risk2"]]
+    ys_comp = [float(v) for v in port["curve_comp"]]
     return xs, ys_comp, ys_risk2
 
 
@@ -203,7 +264,7 @@ def plot_equity_comparison(
     end_str: str,
     out_path: Path,
 ) -> None:
-    """繪製優化前後 365 天時間軸資金曲線對比圖 + Sniper 全訊號單筆淨利柱狀圖。"""
+    """繪製優化前後 365 天時間軸誠實資金曲線對比圖 + Sniper 全訊號單筆淨利柱狀圖。"""
     plt.rcParams["font.sans-serif"] = ["Microsoft JhengHei", "SimHei", "DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
 
@@ -220,59 +281,68 @@ def plot_equity_comparison(
         for sp in ax.spines.values():
             sp.set_color("#334155")
 
+    rpct = sniper.port_2slot.get("risk_pct_per_trade", 2.0)
     curves = [
         (
             sniper.port_2slot,
+            "risk2",
             "#4ade80",
             "-",
             2.6,
-            f"優化後 Sniper 雙槽 3x 複利 (${sniper.port_2slot['eq_comp']:,.0f}, {sniper.port_2slot['comp_ret_pct']:+.0f}%, MDD {sniper.port_2slot['mdd_comp']:.1f}%)",
+            f"★ 主指標 Sniper 雙槽 {rpct:g}% 以損定倉 (${sniper.port_2slot['eq_risk2']:,.0f}, {sniper.port_2slot['risk2_ret_pct']:+.1f}%, MDD {sniper.port_2slot['mdd_risk2']:.1f}%)",
         ),
         (
-            sniper.port_1slot,
+            sniper.port_2slot,
+            "spot1x",
             "#22d3ee",
             "--",
-            2.1,
-            f"優化後 Sniper 單倉 3x 複利 (${sniper.port_1slot['eq_comp']:,.0f}, {sniper.port_1slot['comp_ret_pct']:+.0f}%, MDD {sniper.port_1slot['mdd_comp']:.1f}%)",
+            2.0,
+            f"Sniper 雙槽 1x 真實複利 (${sniper.port_2slot['eq_spot_1x']:,.0f}, {sniper.port_2slot['spot_1x_ret_pct']:+.1f}%, MDD {sniper.port_2slot['mdd_spot_1x']:.1f}%)",
         ),
         (
             bal.port_2slot,
+            "risk2",
             "#a78bfa",
             ":",
             2.0,
-            f"優化後 Balanced 雙槽 3x 複利 (${bal.port_2slot['eq_comp']:,.0f}, {bal.port_2slot['comp_ret_pct']:+.0f}%, MDD {bal.port_2slot['mdd_comp']:.1f}%)",
+            f"Balanced 雙槽 {rpct:g}% 以損定倉 (${bal.port_2slot['eq_risk2']:,.0f}, {bal.port_2slot['risk2_ret_pct']:+.1f}%, MDD {bal.port_2slot['mdd_risk2']:.1f}%)",
         ),
         (
             base.port_1slot,
+            "risk2",
             "#f87171",
             "-.",
-            1.9,
-            f"優化前 Baseline v1 單倉 3x 複利 (${base.port_1slot['eq_comp']:,.0f}, {base.port_1slot['comp_ret_pct']:+.0f}%, MDD {base.port_1slot['mdd_comp']:.1f}%)",
+            1.8,
+            f"Baseline v1 單倉 {rpct:g}% 以損定倉 (${base.port_1slot['eq_risk2']:,.0f}, {base.port_1slot['risk2_ret_pct']:+.1f}%, MDD {base.port_1slot['mdd_risk2']:.1f}%)",
+        ),
+        (
+            sniper.port_2slot,
+            "comp3x",
+            "#fbbf24",
+            ":",
+            1.6,
+            f"Sniper 雙槽 3x [含強平/流動性上限·理論對照] (${sniper.port_2slot['eq_comp']:,.0f}, MDD {sniper.port_2slot['mdd_comp']:.1f}%)",
         ),
     ]
 
-    for port, color, ls, lw, label in curves:
-        xs, ys_comp, _ = _date_curve_points(port, start_ts)
-        ax1.step(xs, ys_comp, where="post", color=color, linestyle=ls, linewidth=lw, label=label)
-        ax1.scatter(xs[-1:], ys_comp[-1:], color=color, s=36, zorder=5)
-
-    # 再加一條 Sniper 雙槽 2% 以損定倉低波動線
-    xs_r2, _, ys_r2 = _date_curve_points(sniper.port_2slot, start_ts)
-    if len(xs_r2) == len(ys_r2):
-        ax1.step(
-            xs_r2,
-            ys_r2,
-            where="post",
-            color="#fbbf24",
-            linestyle="-.",
-            linewidth=1.8,
-            label=f"優化後 Sniper 雙槽 2% 以損定倉 (${sniper.port_2slot['eq_risk2']:,.0f}, MDD {sniper.port_2slot['mdd_risk2']:.1f}%)",
-        )
+    for port, kind, color, ls, lw, label in curves:
+        if kind == "risk2":
+            ts_seq = [pd.Timestamp(t) for t in port.get("curve_risk2_times", [])] or [start_ts]
+            ys_seq = [float(v) for v in port["curve_risk2"]]
+        elif kind == "spot1x":
+            ts_seq = [pd.Timestamp(t) for t in port.get("curve_spot_1x_times", [])] or [start_ts]
+            ys_seq = [float(v) for v in port["curve_spot_1x"]]
+        else:
+            ts_seq = [pd.Timestamp(t) for t in port.get("curve_comp_times", [])] or [start_ts]
+            ys_seq = [float(v) for v in port["curve_comp"]]
+        if len(ts_seq) == len(ys_seq) and ys_seq:
+            ax1.step(ts_seq, ys_seq, where="post", color=color, linestyle=ls, linewidth=lw, label=label)
+            ax1.scatter(ts_seq[-1:], ys_seq[-1:], color=color, s=36, zorder=5)
 
     ax1.set_yscale("log")
     ax1.set_ylabel("帳戶淨值 (USDT, 對數刻度)", color="#cbd5e1", fontsize=10.5)
     ax1.set_title(
-        f"MA200 均線粘合起漲策略 — 365 天全市場優化前後資金曲線 ({start_str} ~ {end_str} | {n_syms} 檔合約 | 已扣 0.12% 費滑)",
+        f"MA200 均線粘合起漲策略 — 365 天全市場誠實資金曲線 ({start_str} ~ {end_str} | {n_syms} 檔合約 | 已扣費滑 + 資金費率)",
         fontsize=12.5,
         fontweight="bold",
         color="#f8fafc",
@@ -381,8 +451,8 @@ def write_html_report(
             f"<td>{st['max_streak']} 筆</td>"
             f"<td>{h1['n']} 筆 ({h1['sum_r']:+.1f}R)</td>"
             f"<td>{h2['n']} 筆 ({h2['sum_r']:+.1f}R)</td>"
-            f"<td>${v.port_1slot['eq_comp']:,.0f} ({v.port_1slot['mdd_comp']:.1f}%)</td>"
-            f"<td class='pos'><b>${v.port_2slot['eq_comp']:,.0f} ({v.port_2slot['mdd_comp']:.1f}%)</b></td>"
+            f"<td class='pos'><b>${v.port_2slot['eq_risk2']:,.0f} ({v.port_2slot['mdd_risk2']:.1f}%)</b></td>"
+            f"<td>${v.port_2slot['eq_comp']:,.0f} ({v.port_2slot['mdd_comp']:.1f}%)</td>"
             f"</tr>"
         )
 
@@ -470,24 +540,28 @@ def write_html_report(
 </head>
 <body>
 <div class="wrap">
-  <h1>MA200 均線粘合起漲策略 — 365 天全市場回測與優化對比</h1>
-  <div class="sub">資料範圍：{start_str} ~ {end_str} (TPE) | 掃描標的：{n_syms} 檔流動 Binance 永續合約 (15m K線) | 出場：1.2R 保本 + MA99 跟隨止盈 (最長 72h) | 已扣 {fee_pct:.2f}% 來回手續費與滑價</div>
+  <h1>MA200 均線粘合起漲策略 — 365 天全市場誠實回測與優化對比</h1>
+  <div class="sub">資料範圍：{start_str} ~ {end_str} (TPE) | 時點滾動成交額標的池：{n_syms} 檔 Binance 永續合約 (15m K線) | 出場：1.2R 保本(同根保守檢查低點) + MA99 跟隨止盈 (最長 72h) | 已扣 {fee_pct:.2f}% 來回費滑 + 歷史/保守資金費率</div>
 
   <div class="kpis">
+    <div class="kpi"><div class="k">★ 主指標：雙槽 {p2['risk_pct_per_trade']:g}% 以損定倉</div><div class="v pos">${p2['eq_risk2']:,.0f} (MDD {p2['mdd_risk2']:.1f}%)</div></div>
+    <div class="kpi"><div class="k">雙槽 1x 真實無槓桿複利</div><div class="v pos">${p2['eq_spot_1x']:,.0f} (MDD {p2['mdd_spot_1x']:.1f}%)</div></div>
     <div class="kpi"><div class="k">Sniper 總訊號 / 勝率</div><div class="v pos">{st_s['n']} 筆 / {st_s['wr']:.1f}%</div></div>
     <div class="kpi"><div class="k">平均淨利 / 平均 R</div><div class="v pos">{st_s['avg_pnl']:+.2f}% / {st_s['avg_r']:+.2f}R</div></div>
     <div class="kpi"><div class="k">一年累計總 R / 盈虧比</div><div class="v pos">{st_s['sum_r']:+.1f}R / {st_s['pf']:.2f}</div></div>
-    <div class="kpi"><div class="k">雙槽 3x 複利 ($1,000起)</div><div class="v pos">${p2['eq_comp']:,.0f} (MDD {p2['mdd_comp']:.1f}%)</div></div>
-    <div class="kpi"><div class="k">單倉 3x 複利 ($1,000起)</div><div class="v">${p1['eq_comp']:,.0f} (MDD {p1['mdd_comp']:.1f}%)</div></div>
-    <div class="kpi"><div class="k">雙槽 2% 以損定倉</div><div class="v">${p2['eq_risk2']:,.0f} (MDD {p2['mdd_risk2']:.1f}%)</div></div>
+    <div class="kpi"><div class="k">雙槽 3x [含強平/流動性上限·理論]</div><div class="v">${p2['eq_comp']:,.0f} (MDD {p2['mdd_comp']:.1f}%)</div></div>
   </div>
 
   <div class="panel">
-    <h2>1. 優化前後與 H1 訓練 → H2 盲測對比 (H1 訓練期: 2025-11 ~ 2026-05-14 | H2 驗證期: 2026-05-15 ~ 2026-11)</h2>
+    {bt_utils.render_oos_walkforward_html(sniper.oos_report, risk_pct=p2['risk_pct_per_trade']) if sniper.oos_report else ""}
+  </div>
+
+  <div class="panel">
+    <h2>1. 優化前後與樣本內 (IS) → 樣本外盲測 (OOS) 對比</h2>
     <div style="overflow-x:auto">
       <table>
         <thead>
-          <tr><th>版本</th><th>訊號</th><th>勝率</th><th>平均1x淨利</th><th>平均R</th><th>總R</th><th>PF</th><th>最大連虧</th><th>H1 訓練期</th><th>H2 驗證期</th><th>單倉3x淨值(MDD)</th><th>雙槽3x淨值(MDD)</th></tr>
+          <tr><th>版本</th><th>訊號</th><th>勝率</th><th>平均1x淨利</th><th>平均R</th><th>總R</th><th>PF</th><th>最大連虧</th><th>IS 樣本內</th><th>OOS 樣本外</th><th>★雙槽{p2['risk_pct_per_trade']:g}%定倉(MDD)</th><th>雙槽3x理論對照(MDD)</th></tr>
         </thead>
         <tbody>
           {_comp_row(base, "<span class='badge b-base'>優化前</span>")}
@@ -538,12 +612,22 @@ def write_html_report(
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="MA200 均線粘合起漲策略 365 天回測與視覺化對比工具")
+    p = argparse.ArgumentParser(description="MA200 均線粘合起漲策略 365 天誠實回測與視覺化對比工具")
     p.add_argument("--cache-dir", type=Path, default=Path("breakout_output/cache_365d"))
     p.add_argument("--out-dir", type=Path, default=Path("breakout_output/backtest_365d_ma200"))
     p.add_argument("--max-hold", type=int, default=288)
     p.add_argument("--arm-r", type=float, default=1.2)
     p.add_argument("--fee-pct", type=float, default=0.12)
+    p.add_argument("--min-vol", type=float, default=1_000_000.0, help="訊號當下前24h最低滾動成交額 (USDT)")
+    p.add_argument("--top", type=int, default=0, help="時點滾動24h成交額前N名過濾 (0=全部符合min-vol標的)")
+    p.add_argument("--risk-pct", type=float, default=2.0, help="主指標單筆風險百分比 (預設 2.0%%)")
+    p.add_argument("--funding-rate-8h", type=float, default=0.03, help="無法抓取歷史費率時的保守估計資金費率 (%%/8h)")
+    p.add_argument("--no-fetch-funding", action="store_true", help="不連網抓取歷史資金費率，直接使用保守估計值")
+    p.add_argument("--max-bar-vol-pct", type=float, default=0.02, help="單筆倉位佔突破K線成交額上限比例 (預設 0.02)")
+    p.add_argument("--no-liquidity-cap", action="store_true", help="停用倉位流動性上限")
+    p.add_argument("--oos-date", type=str, default="2026-05-15", help="樣本外盲測切分日期 YYYY-MM-DD (空字串則依 --oos-ratio)")
+    p.add_argument("--oos-ratio", type=float, default=0.50, help="樣本外盲測時間佔比")
+    p.add_argument("--wf-folds", type=int, default=4, help="Walk-Forward 時間切片期數 (預設 4)")
     p.add_argument("--skip-cards", action="store_true", help="只輸出統計與資金曲線，不重繪單筆 K 線圖卡")
     return p.parse_args()
 
@@ -552,7 +636,35 @@ def main() -> int:
     t0 = time.time()
     args = parse_args()
     dfs, start_str, end_str = _load_cached_market(args.cache_dir)
-    print(f"已載入 {len(dfs)} 檔 15m 365d 快取資料 ({start_str} ~ {end_str})...")
+    print(f"已載入 {len(dfs)} 檔 15m 快取資料 ({start_str} ~ {end_str})...")
+
+    pit_index = bt_utils.PointInTimeVolumeIndex(dfs)
+    funding_store = bt_utils.FundingRateStore(
+        cache_dir=args.cache_dir,
+        fallback_rate_8h_pct=args.funding_rate_8h,
+        fetch_online=not args.no_fetch_funding,
+        session=scanner.HTTP,
+        base_url=scanner.BINANCE_FAPI,
+    )
+    window_start = min(df.index[0] for df in dfs.values())
+    window_end = max(df.index[-1] for df in dfs.values())
+    common_kw = dict(
+        pit_index=pit_index,
+        funding_store=funding_store,
+        window_start=window_start,
+        window_end=window_end,
+        max_hold_bars=args.max_hold,
+        arm_r=args.arm_r,
+        fee_pct=args.fee_pct,
+        min_vol_usd=args.min_vol,
+        top_n=args.top,
+        risk_pct=args.risk_pct,
+        oos_date=args.oos_date,
+        oos_ratio=args.oos_ratio,
+        wf_folds=args.wf_folds,
+        apply_liquidity_cap=not args.no_liquidity_cap,
+        max_bar_vol_share=args.max_bar_vol_pct,
+    )
 
     variants = {
         "baseline": _run_variant(
@@ -561,10 +673,8 @@ def main() -> int:
             "Baseline v1 (優化前)",
             preset_override=BASELINE_V1_PARAMS,
             preset_name="sniper",
-            max_hold_bars=args.max_hold,
-            arm_r=args.arm_r,
             scratch_bars=0,
-            fee_pct=args.fee_pct,
+            **common_kw,
         ),
         "sniper": _run_variant(
             dfs,
@@ -572,9 +682,7 @@ def main() -> int:
             "Sniper 狙擊模式 (優化主推)",
             preset_override=None,
             preset_name="sniper",
-            max_hold_bars=args.max_hold,
-            arm_r=args.arm_r,
-            fee_pct=args.fee_pct,
+            **common_kw,
         ),
         "balanced": _run_variant(
             dfs,
@@ -582,22 +690,21 @@ def main() -> int:
             "Balanced 平衡模式",
             preset_override=None,
             preset_name="balanced",
-            max_hold_bars=args.max_hold,
-            arm_r=args.arm_r,
-            fee_pct=args.fee_pct,
+            **common_kw,
         ),
     }
 
-    print("\n=== 365 天優化前後回測總覽 (已扣 0.12% 費滑) ===")
+    print(f"\n=== 365 天優化前後誠實回測總覽 (已扣 {args.fee_pct:.2f}% 費滑 + 資金費率) ===")
     for key in ("baseline", "sniper", "balanced"):
         v = variants[key]
         st = v.stats
-        p1, p2 = v.port_1slot, v.port_2slot
+        p2 = v.port_2slot
         print(
             f"[{v.title:<24}] n={st['n']:2d} | WR={st['wr']:5.1f}% | AvgP={st['avg_pnl']:+6.2f}% | "
             f"AvgR={st['avg_r']:+5.2f}R | SumR={st['sum_r']:+6.1f}R | PF={st['pf']:5.2f} | "
-            f"H1={st['h1']['n']}({st['h1']['sum_r']:+.1f}R) H2={st['h2']['n']}({st['h2']['sum_r']:+.1f}R) | "
-            f"1槽=${p1['eq_comp']:,.0f}(MDD {p1['mdd_comp']:.1f}%) | 2槽=${p2['eq_comp']:,.0f}(MDD {p2['mdd_comp']:.1f}%)"
+            f"IS={st['h1']['n']}({st['h1']['sum_r']:+.1f}R) OOS={st['h2']['n']}({st['h2']['sum_r']:+.1f}R) | "
+            f"★2槽{args.risk_pct:g}%定倉=${p2['eq_risk2']:,.0f}(MDD {p2['mdd_risk2']:.1f}%) | "
+            f"1x複利=${p2['eq_spot_1x']:,.0f} | 3x理論=${p2['eq_comp']:,.0f}"
         )
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
