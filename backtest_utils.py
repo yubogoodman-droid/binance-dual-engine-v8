@@ -220,7 +220,7 @@ class PointInTimeVolumeIndex:
                 continue
             sdf = df[~df.index.duplicated(keep="last")].sort_index()
             idx_utc = pd.DatetimeIndex(sdf.index).tz_convert("UTC")
-            ts_ms = (idx_utc.asi8 // 1_000_000).to_numpy(dtype=np.int64)
+            ts_ms = np.asarray(idx_utc.as_unit("ms").asi8, dtype=np.int64)
             qv = extract_quote_volume_array(sdf)
             cum_qv = np.empty(len(qv) + 1, dtype=np.float64)
             cum_qv[0] = 0.0
