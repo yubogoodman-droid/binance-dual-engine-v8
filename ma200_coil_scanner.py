@@ -29,8 +29,12 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import json
+import logging
+import os
 from pathlib import Path
 import sys
+import threading
 import time
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from zoneinfo import ZoneInfo
@@ -43,10 +47,21 @@ import numpy as np
 import pandas as pd
 import requests
 
+import backtest_utils as bt_utils
+
+logger = logging.getLogger("ma200_coil_scanner")
+if not logger.handlers:
+    _handler = logging.StreamHandler(sys.stderr)
+    _handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.WARNING)
+
 TPE = ZoneInfo("Asia/Taipei")
 BINANCE_FAPI = "https://fapi.binance.com"
 HTTP = requests.Session()
 HTTP.headers.update({"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+_RATE_LOCK = threading.Lock()
+_COOLDOWN_UNTIL = 0.0
 
 INTERVAL_MS = {
     "5m": 300_000,
@@ -178,19 +193,46 @@ class MA200CoilSignal:
 
 
 def api_get(path: str, params: Optional[Dict[str, Any]] = None, retries: int = 4) -> Any:
-    """呼叫幣安永續合約 API 並自動處理限流重試。"""
+    """呼叫幣安永續合約 API 並自動處理限流重試與警告日誌。"""
+    global _COOLDOWN_UNTIL
     last_err: Optional[Exception] = None
     for attempt in range(retries):
+        wait_cd = 0.0
+        with _RATE_LOCK:
+            now_m = time.monotonic()
+            if _COOLDOWN_UNTIL > now_m:
+                wait_cd = _COOLDOWN_UNTIL - now_m
+        if wait_cd > 0:
+            time.sleep(wait_cd)
         try:
             resp = HTTP.get(BINANCE_FAPI + path, params=params, timeout=15)
+            used_w = resp.headers.get("X-MBX-USED-WEIGHT-1M")
+            if used_w and used_w.isdigit() and int(used_w) >= 1950:
+                with _RATE_LOCK:
+                    _COOLDOWN_UNTIL = max(_COOLDOWN_UNTIL, time.monotonic() + 10.0)
             if resp.status_code in (418, 429):
-                time.sleep(1.5 * (attempt + 1))
+                retry_hdr = resp.headers.get("Retry-After")
+                wait_s = float(retry_hdr) if (retry_hdr and retry_hdr.isdigit()) else 2.0 * (2 ** attempt)
+                with _RATE_LOCK:
+                    _COOLDOWN_UNTIL = max(_COOLDOWN_UNTIL, time.monotonic() + wait_s)
+                logger.warning(
+                    "Binance API 觸發限流 (HTTP %s, %s)，等待 %.1fs 後重試 (%d/%d)",
+                    resp.status_code,
+                    path,
+                    wait_s,
+                    attempt + 1,
+                    retries,
+                )
+                time.sleep(wait_s)
                 continue
             resp.raise_for_status()
             return resp.json()
         except Exception as exc:
             last_err = exc
-            time.sleep(0.4 * (attempt + 1))
+            wait_s = 0.5 * (2 ** attempt)
+            if attempt + 1 < retries:
+                logger.warning("Binance API 請求失敗 (%s): %s，%.1fs 後重試 (%d/%d)", path, exc, wait_s, attempt + 1, retries)
+                time.sleep(wait_s)
     raise RuntimeError(f"Binance API failed ({path}): {last_err}")
 
 
@@ -258,12 +300,12 @@ def fetch_klines(
     interval: str = "15m",
     days: int = 5,
     end_dt: Optional[datetime] = None,
-    drop_forming: bool = False,
+    drop_forming: bool = True,
 ) -> pd.DataFrame:
-    """分頁拉取指定幣種與區間的幣安永續 K 線資料（含主動買盤欄位）。"""
+    """分頁拉取指定幣種與區間的幣安永續 K 線資料（含主動買盤欄位，預設剔除未收盤當根 K 線）。"""
     bar_ms = INTERVAL_MS.get(interval, 900_000)
     bars_per_day = max(1, int(86_400_000 // bar_ms))
-    need = days * bars_per_day + 260
+    need = days * bars_per_day + 260 + (1 if drop_forming else 0)
 
     end_ms = int(end_dt.timestamp() * 1000) if end_dt is not None else None
     now_ms = int(time.time() * 1000)
@@ -285,8 +327,10 @@ def fetch_klines(
 
     if not raw:
         return pd.DataFrame()
-    if drop_forming and int(raw[-1][0]) + bar_ms > now_ms:
+    while drop_forming and raw and int(raw[-1][0]) + bar_ms > now_ms:
         raw = raw[:-1]
+    if not raw:
+        return pd.DataFrame()
 
     df = pd.DataFrame(
         {
@@ -516,16 +560,20 @@ def simulate_ma99_trade(
     arm_r: float = 1.2,
     scratch_bars: int = 0,
     fee_roundtrip_pct: float = 0.12,
+    funding_store: Optional[bt_utils.FundingRateStore] = None,
+    trailing_24h_qv_usd: float = 0.0,
 ) -> Optional[Dict[str, Any]]:
-    """模擬沿 MA99 移動停利，達 +1.2R 後上移保本（已扣 0.12% 費滑）。"""
+    """模擬沿 MA99 移動停利，達 +1.2R 後上移保本（保守盤中止損檢查 + 扣費滑與資金費率）。"""
     i = sig.bar_idx
     if i >= len(df) - 2:
         return None
 
+    o = df["Open"].to_numpy(float)
     h = df["High"].to_numpy(float)
     l = df["Low"].to_numpy(float)
     c = df["Close"].to_numpy(float)
     m99 = df["MA99"].to_numpy(float)
+    qv_arr = bt_utils.extract_quote_volume_array(df)
     times = df.index
 
     entry = sig.entry_price
@@ -539,16 +587,23 @@ def simulate_ma99_trade(
     exit_idx = end_idx
     exit_px = float(c[end_idx])
     reason = "72h到期"
+    worst_low = float(entry)
 
     for j in range(i + 1, end_idx + 1):
+        worst_low = min(worst_low, float(l[j]))
         if l[j] <= cur_stop:
             exit_idx = j
-            exit_px = float(cur_stop)
+            exit_px = float(min(o[j], cur_stop))
             reason = "保本鎖利" if armed else "初始止損"
             break
         if not armed and h[j] >= entry + arm_r * risk:
             armed = True
             cur_stop = max(cur_stop, entry * 1.0025)
+            if l[j] <= cur_stop:
+                exit_idx = j
+                exit_px = float(cur_stop)
+                reason = "保本鎖利"
+                break
         if scratch_bars > 0 and not armed and (j - i) >= scratch_bars and c[j] >= entry * 1.0025:
             exit_idx = j
             exit_px = float(c[j])
@@ -560,7 +615,18 @@ def simulate_ma99_trade(
             reason = "破MA99止盈"
             break
 
-    pnl_pct = (exit_px / entry - 1.0) * 100.0 - fee_roundtrip_pct
+    bar_ms = INTERVAL_MS.get(sig.interval, 900_000)
+    funding_cost_pct = 0.0
+    funding_source = "none"
+    if funding_store is not None:
+        funding_cost_pct, _, funding_source = funding_store.compute_funding_cost_pct(
+            sig.symbol,
+            bt_utils.ts_to_ms(times[i]),
+            bt_utils.ts_to_ms(times[exit_idx]),
+            bar_ms=bar_ms,
+        )
+
+    pnl_pct = (exit_px / entry - 1.0) * 100.0 - fee_roundtrip_pct - funding_cost_pct
     r_mult = pnl_pct / sig.risk_pct
     return {
         "exit_idx": exit_idx,
@@ -569,6 +635,11 @@ def simulate_ma99_trade(
         "reason": reason,
         "pnl_pct": pnl_pct,
         "r_mult": r_mult,
+        "funding_cost_pct": funding_cost_pct,
+        "funding_source": funding_source,
+        "worst_low_price": worst_low,
+        "bar_quote_vol_usd": float(qv_arr[i]) if i < len(qv_arr) else 0.0,
+        "trailing_24h_qv_usd": float(trailing_24h_qv_usd),
     }
 
 
@@ -722,135 +793,170 @@ def print_signals(signals: Sequence[MA200CoilSignal], exit_map: Optional[Dict[Tu
     print("=" * 136)
 
 
+def load_seen_state(path: Path) -> Set[Tuple[str, str]]:
+    if not path.is_file():
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return {(str(item[0]), str(item[1])) for item in data if isinstance(item, (list, tuple)) and len(item) >= 2}
+    except Exception as exc:
+        logger.warning("讀取盯盤已通知紀錄失敗 (%s): %s", path, exc)
+    return set()
+
+
+def save_seen_state(path: Path, seen: Set[Tuple[str, str]], max_items: int = 5000) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        ordered = sorted(seen, key=lambda kv: (kv[1], kv[0]))[-max_items:]
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        tmp_path.write_text(json.dumps(ordered, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp_path, path)
+    except Exception as exc:
+        logger.warning("寫入盯盤已通知紀錄失敗 (%s): %s", path, exc)
+
+
 def simulate_portfolio(
     signals: Sequence[MA200CoilSignal],
     exit_map: Dict[Tuple[str, datetime], Dict[str, Any]],
     initial_cap: float = 1000.0,
     leverage: float = 3.0,
     risk_pct_per_trade: float = 2.0,
-    max_slots: int = 1,
+    max_slots: int = 2,
+    apply_liquidity_cap: bool = True,
+    max_bar_vol_share: float = 0.02,
+    base_mmr: float = 0.015,
 ) -> Dict[str, Any]:
-    """多槽位/單倉排他滾倉模擬：3x 分槽全倉複利 + 2% 以損定倉安全複利 + 固定 3x 單利。"""
+    """誠實多槽位資金模擬：2% 以損定倉複利(主指標) + 1x 真實複利 + 3x 含強平與流動性上限(理論對照)。"""
     max_slots = max(1, int(max_slots))
-    cash_comp = initial_cap
-    cash_risk2 = initial_cap
-    eq_fixed = initial_cap
-    peak_comp = initial_cap
-    peak_risk2 = initial_cap
-    mdd_comp = 0.0
-    mdd_risk2 = 0.0
-
-    active: List[Dict[str, Any]] = []
-    executed_items: List[Tuple[MA200CoilSignal, Dict[str, Any], float, float]] = []
-    skipped_items: List[Tuple[MA200CoilSignal, Dict[str, Any]]] = []
-    curve_comp: List[float] = [initial_cap]
-    curve_risk2: List[float] = [initial_cap]
-    curve_fixed: List[float] = [initial_cap]
-    labels: List[str] = ["起點"]
-
-    def _settle(cutoff: Optional[datetime]) -> None:
-        nonlocal cash_comp, cash_risk2, eq_fixed, peak_comp, peak_risk2, mdd_comp, mdd_risk2
-        active.sort(key=lambda item: item["exit_time"])
-        while active and (cutoff is None or active[0]["exit_time"] <= cutoff):
-            item = active.pop(0)
-            cash_comp += item["m_comp"] * (1.0 + item["lev_ret"])
-            cash_risk2 += item["m_risk2"] * (1.0 + item["r2_ret"])
-            eq_fixed += item["fixed_delta"]
-
-            tot_comp = cash_comp + sum(p["m_comp"] for p in active)
-            tot_risk2 = cash_risk2 + sum(p["m_risk2"] for p in active)
-            peak_comp = max(peak_comp, tot_comp)
-            peak_risk2 = max(peak_risk2, tot_risk2)
-            mdd_comp = max(mdd_comp, (peak_comp - tot_comp) / peak_comp * 100.0)
-            mdd_risk2 = max(mdd_risk2, (peak_risk2 - tot_risk2) / peak_risk2 * 100.0)
-            curve_comp.append(tot_comp)
-            curve_risk2.append(tot_risk2)
-            curve_fixed.append(eq_fixed)
-            sig_obj: MA200CoilSignal = item["sig"]
-            labels.append(f"{sig_obj.symbol.replace('USDT', '')}\n{sig_obj.timestamp.strftime('%m-%d')}")
-            executed_items.append((sig_obj, item["ex"], item["lev_ret"] * 100.0, tot_comp))
-
+    inputs: List[bt_utils.PortfolioTradeInput] = []
     for s in sorted(signals, key=lambda x: (x.timestamp, -x.score, -x.qvm)):
         ex = exit_map.get((s.symbol, s.timestamp))
         if ex is None:
             continue
-        _settle(s.timestamp)
-        if len(active) >= max_slots:
-            skipped_items.append((s, ex))
-            continue
-
-        slots_free = max_slots - len(active)
-        m_comp = cash_comp / slots_free
-        m_risk2 = cash_risk2 / slots_free
-        cash_comp -= m_comp
-        cash_risk2 -= m_risk2
-
-        pnl = float(ex["pnl_pct"])
-        lev_ret = max(-0.95, pnl / 100.0 * leverage)
-        risk_lev = min(leverage, risk_pct_per_trade / max(s.risk_pct, 0.8))
-        r2_ret = max(-0.95, (pnl / 100.0) * risk_lev)
-        fixed_delta = (initial_cap / max_slots) * (pnl / 100.0 * leverage)
-
-        active.append(
-            {
-                "exit_time": ex["exit_time"],
-                "sig": s,
-                "ex": ex,
-                "m_comp": m_comp,
-                "lev_ret": lev_ret,
-                "m_risk2": m_risk2,
-                "r2_ret": r2_ret,
-                "fixed_delta": fixed_delta,
-            }
+        inputs.append(
+            bt_utils.PortfolioTradeInput(
+                symbol=s.symbol,
+                entry_time=s.timestamp,
+                exit_time=ex["exit_time"],
+                entry_price=float(s.entry_price),
+                stop_price=float(s.stop_price),
+                exit_price=float(ex["exit_price"]),
+                risk_pct=float(s.risk_pct),
+                net_pnl_pct=float(ex["pnl_pct"]),
+                r_mult=float(ex["r_mult"]),
+                worst_low_price=float(ex.get("worst_low_price", min(s.entry_price, ex["exit_price"]))),
+                bar_quote_vol_usd=float(ex.get("bar_quote_vol_usd", 0.0)),
+                trailing_24h_qv_usd=float(ex.get("trailing_24h_qv_usd", 0.0)),
+                funding_cost_pct=float(ex.get("funding_cost_pct", 0.0)),
+                priority=float(s.score) * 1000.0 + float(s.qvm),
+                payload=(s, ex),
+            )
         )
 
-    _settle(None)
+    res = bt_utils.simulate_honest_portfolio(
+        inputs,
+        initial_cap=initial_cap,
+        risk_pct_per_trade=risk_pct_per_trade,
+        max_positions=max_slots,
+        leverage_3x=leverage,
+        slots_3x=max_slots,
+        base_mmr=base_mmr,
+        apply_liquidity_cap=apply_liquidity_cap,
+        max_bar_vol_share=max_bar_vol_share,
+    )
+    hr = res["headline_risk"]
+    sp = res["spot_1x"]
+    c3 = res["comp_3x"]
+    f3 = res["fixed_3x"]
+
+    executed_risk_keys = {(rec.trade.symbol, rec.trade.entry_time) for rec in hr["records"]}
+    executed_items = [
+        (rec.trade.payload[0], rec.trade.payload[1], rec.acct_ret_pct, rec.equity_after_usd)
+        for rec in hr["records"]
+    ]
+    executed_3x_items = [
+        (rec.trade.payload[0], rec.trade.payload[1], rec.acct_ret_pct, rec.equity_after_usd)
+        for rec in c3["records"]
+    ]
+    skipped_items = [
+        inp.payload
+        for inp in inputs
+        if (inp.symbol, inp.entry_time) not in executed_risk_keys
+    ]
 
     return {
         "initial_cap": initial_cap,
         "leverage": leverage,
+        "risk_pct_per_trade": risk_pct_per_trade,
         "max_slots": max_slots,
-        "executed": len(executed_items),
-        "skipped": len(skipped_items),
+        "executed": hr["executed_count"],
+        "skipped": hr["skipped_count"],
         "executed_items": executed_items,
+        "executed_3x_items": executed_3x_items,
         "skipped_items": skipped_items,
-        "eq_comp": cash_comp,
-        "comp_ret_pct": (cash_comp / initial_cap - 1.0) * 100.0,
-        "eq_risk2": cash_risk2,
-        "risk2_ret_pct": (cash_risk2 / initial_cap - 1.0) * 100.0,
-        "eq_fixed": eq_fixed,
-        "fixed_ret_pct": (eq_fixed / initial_cap - 1.0) * 100.0,
-        "mdd_comp": mdd_comp,
-        "mdd_risk2": mdd_risk2,
-        "curve_comp": curve_comp,
-        "curve_risk2": curve_risk2,
-        "curve_fixed": curve_fixed,
-        "labels": labels,
+        "eq_risk2": hr["final_eq"],
+        "risk2_ret_pct": hr["ret_pct"],
+        "mdd_risk2": hr["mdd_pct"],
+        "curve_risk2": hr["curve_values"],
+        "curve_risk2_times": hr["curve_times"],
+        "eq_spot_1x": sp["final_eq"],
+        "spot_1x_ret_pct": sp["ret_pct"],
+        "mdd_spot_1x": sp["mdd_pct"],
+        "curve_spot_1x": sp["curve_values"],
+        "curve_spot_1x_times": sp["curve_times"],
+        "eq_comp": c3["final_eq"],
+        "comp_ret_pct": c3["ret_pct"],
+        "mdd_comp": c3["mdd_pct"],
+        "curve_comp": c3["curve_values"],
+        "curve_comp_times": c3["curve_times"],
+        "liq_capped_comp": c3["liquidity_capped_count"],
+        "liquidated_comp": c3["liquidated_count"],
+        "eq_fixed": f3["final_eq"],
+        "fixed_ret_pct": f3["ret_pct"],
+        "curve_fixed": f3["curve_values"],
+        "labels": hr["curve_labels"],
+        "arith_sum_1x_pct": res["arith_sum_1x_pct"],
+        "total_funding_pct": res["total_funding_pct"],
     }
 
 
-def run_backtest_cache(cache_dir: Path, preset: str = "sniper", relaxed: bool = False) -> int:
-    """針對本地 pickle 快取（如 breakout_output/cache_365d）執行快速無差別回測。"""
-    files = sorted(cache_dir.glob("*.pkl"))
-    if not files:
+def run_backtest_cache(
+    cache_dir: Path,
+    preset: str = "sniper",
+    relaxed: bool = False,
+    min_vol_usd: float = 1_000_000.0,
+    top_n: int = 0,
+    funding_rate_8h_pct: float = 0.03,
+    fetch_funding: bool = True,
+) -> int:
+    """針對本地 pickle 快取執行無偏誤回測（含時點滾動成交額過濾與資金費率扣除）。"""
+    raw_dfs = bt_utils.load_cached_frames([cache_dir], interval="15m", excluded_symbols=EXCLUDED_SYMBOLS)
+    if not raw_dfs:
         print(f"找不到快取檔案: {cache_dir}")
         return 1
 
     active_preset = "relaxed" if relaxed else preset
+    dfs: Dict[str, pd.DataFrame] = {sym: compute_indicators(df) for sym, df in raw_dfs.items()}
+    pit_index = bt_utils.PointInTimeVolumeIndex(dfs)
+    funding_store = bt_utils.FundingRateStore(
+        cache_dir=cache_dir,
+        fallback_rate_8h_pct=funding_rate_8h_pct,
+        fetch_online=fetch_funding,
+        session=HTTP,
+        base_url=BINANCE_FAPI,
+    )
+
     all_sigs: List[MA200CoilSignal] = []
     exit_map: Dict[Tuple[str, datetime], Dict[str, Any]] = {}
 
-    for path in files:
-        sym = path.name.split("_")[0]
-        if sym in EXCLUDED_SYMBOLS:
-            continue
-        raw_df = pd.read_pickle(path)
-        if raw_df.empty:
-            continue
-        df = compute_indicators(raw_df)
+    for sym, df in sorted(dfs.items()):
         sigs = detect_ma200_coil_breakouts(df, sym, interval="15m", preset=active_preset)
         for s in sigs:
-            sim = simulate_ma99_trade(df, s)
+            ok_vol, qv24, _ = pit_index.check_eligibility(sym, s.timestamp, min_quote_vol=min_vol_usd, top_n=top_n)
+            if not ok_vol:
+                continue
+            sim = simulate_ma99_trade(df, s, funding_store=funding_store, trailing_24h_qv_usd=qv24)
             if sim is not None:
                 all_sigs.append(s)
                 exit_map[(sym, s.timestamp)] = sim
@@ -865,7 +971,7 @@ def run_backtest_cache(cache_dir: Path, preset: str = "sniper", relaxed: bool = 
     win_rate = float(np.mean(pnls > 0) * 100.0)
     gp = float(np.sum(pnls[pnls > 0]))
     gl = float(abs(np.sum(pnls[pnls <= 0])))
-    pf = gp / gl if gl > 0 else 99.9
+    pf = gp / gl if gl > 0 else float("inf")
     streak = 0
     max_streak = 0
     for p in pnls:
@@ -878,21 +984,21 @@ def run_backtest_cache(cache_dir: Path, preset: str = "sniper", relaxed: bool = 
     port1 = simulate_portfolio(all_sigs, exit_map, max_slots=1)
     port2 = simulate_portfolio(all_sigs, exit_map, max_slots=2)
     print(
-        f"\n[回測統計 | 模式={active_preset}] 檔數: {len(files)} | 總訊號: {len(all_sigs)} | 勝率: {win_rate:.1f}% | "
+        f"\n[回測統計 | 模式={active_preset}] 標的池: {len(dfs)} 檔 | 總訊號: {len(all_sigs)} | 勝率: {win_rate:.1f}% | "
         f"平均淨利: {np.mean(pnls):+.2f}% | 平均R: {np.mean(rs):+.2f}R | 總R: {np.sum(rs):+.1f}R | "
-        f"PF: {pf:.2f} | 最大連虧: {max_streak} 筆"
+        f"PF: {bt_utils.fmt_pf(pf)} | 最大連虧: {max_streak} 筆"
     )
     print(
-        f"[單倉模擬 ($1,000 起)] 執行 {port1['executed']} 筆 (略過重疊 {port1['skipped']} 筆) | "
-        f"3x全倉複利: ${port1['eq_comp']:,.0f} (MDD {port1['mdd_comp']:.1f}%) | "
-        f"2%以損定倉: ${port1['eq_risk2']:,.0f} (MDD {port1['mdd_risk2']:.1f}%) | "
-        f"固定3x單利: ${port1['eq_fixed']:,.0f}"
+        f"[雙槽主推 ($1,000 起)] 執行 {port2['executed']} 筆 (略過重疊 {port2['skipped']} 筆) | "
+        f"★2%以損定倉(主指標): ${port2['eq_risk2']:,.0f} (MDD {port2['mdd_risk2']:.1f}%) | "
+        f"1x真實複利: ${port2['eq_spot_1x']:,.0f} | "
+        f"3x含強平/流動性上限(理論): ${port2['eq_comp']:,.0f} (MDD {port2['mdd_comp']:.1f}%, 強平{port2['liquidated_comp']}次)"
     )
     print(
-        f"[雙槽模擬 ($1,000 起)] 執行 {port2['executed']} 筆 (略過重疊 {port2['skipped']} 筆) | "
-        f"3x分槽複利: ${port2['eq_comp']:,.0f} (MDD {port2['mdd_comp']:.1f}%) | "
-        f"2%以損定倉: ${port2['eq_risk2']:,.0f} (MDD {port2['mdd_risk2']:.1f}%) | "
-        f"固定3x單利: ${port2['eq_fixed']:,.0f}"
+        f"[單倉對照 ($1,000 起)] 執行 {port1['executed']} 筆 (略過重疊 {port1['skipped']} 筆) | "
+        f"★2%以損定倉(主指標): ${port1['eq_risk2']:,.0f} (MDD {port1['mdd_risk2']:.1f}%) | "
+        f"1x真實複利: ${port1['eq_spot_1x']:,.0f} | "
+        f"3x含強平/流動性上限(理論): ${port1['eq_comp']:,.0f} (MDD {port1['mdd_comp']:.1f}%, 強平{port1['liquidated_comp']}次)"
     )
     return 0
 
@@ -912,7 +1018,7 @@ def run_live_scan(
 ) -> List[MA200CoilSignal]:
     """平行掃描指定幣種清單並選擇性輸出復盤圖卡（實盤預設剔除未收盤 K 線避免訊號重繪）。"""
     found: List[MA200CoilSignal] = []
-    drop_forming = (end_dt is None) and not include_forming
+    drop_forming = not include_forming
 
     def _worker(sym: str) -> List[MA200CoilSignal]:
         try:
@@ -929,7 +1035,8 @@ def run_live_scan(
                         ex_map[s.timestamp] = sim
                 plot_signal_chart(df, sigs, sym, interval, out_dir / f"{sym}_{interval}_ma200_coil.png", exit_map=ex_map)
             return sigs
-        except Exception:
+        except Exception as exc:
+            logger.warning("掃描 %s (%s) 失敗: %s", sym, interval, exc)
             return []
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -960,15 +1067,21 @@ def main() -> int:
     parser.add_argument("--relaxed", action="store_true", help="等同 --preset relaxed")
     parser.add_argument("--plot", action="store_true", help="輸出 K 線與 8 均線復盤圖卡 PNG")
     parser.add_argument("--include-forming", action="store_true", help="即時掃描時納入尚未收盤的當根 K 線 (預設僅掃描已收盤 K 線)")
+    parser.add_argument("--seen-file", type=str, default="", help="--watch 已推播訊號持久化檔案路徑")
     parser.add_argument("--out-dir", type=str, default="breakout_output", help="圖卡輸出資料夾")
     parser.add_argument("--backtest-cache", type=str, default="", help="指定本地快取資料夾執行回測驗證")
+    parser.add_argument("--funding-rate-8h", type=float, default=0.03, help="無法抓取歷史資金費率時的保守估計值 (%%/8h，預設 0.03)")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
     active_preset = "relaxed" if args.relaxed else args.preset
 
     if args.backtest_cache:
-        return run_backtest_cache(Path(args.backtest_cache), preset=active_preset)
+        return run_backtest_cache(
+            Path(args.backtest_cache),
+            preset=active_preset,
+            funding_rate_8h_pct=args.funding_rate_8h,
+        )
 
     end_dt: Optional[datetime] = None
     if args.end_date:
@@ -989,11 +1102,12 @@ def main() -> int:
     if not args.scan and args.watch <= 0:
         args.scan = True
 
-    seen: Set[Tuple[str, str]] = set()
+    seen_path = Path(args.seen_file) if args.seen_file else (out_dir / ".watch_seen_ma200.json")
+    seen: Set[Tuple[str, str]] = load_seen_state(seen_path) if args.watch > 0 else set()
     while True:
         now_str = datetime.now(TPE).strftime("%Y-%m-%d %H:%M:%S")
         syms = list_usdt_perps(top_n=args.top)
-        print(f"\n[{now_str} TPE] 掃描 {len(syms)} 檔永續合約 ({args.interval} | MA200 粘合起漲 {active_preset})...")
+        print(f"\n[{now_str} TPE] 掃描 {len(syms)} 檔永續合約 ({args.interval} | MA200 粘合起漲 {active_preset} | 已收盤K={not args.include_forming})...")
         sigs = run_live_scan(
             syms, args.interval, args.days, recent_bars=args.recent_bars, end_dt=end_dt,
             preset=active_preset, relaxed=False, plot=args.plot, out_dir=out_dir,
@@ -1001,11 +1115,14 @@ def main() -> int:
         )
         if args.watch > 0:
             fresh = [s for s in sigs if (s.symbol, s.timestamp.isoformat()) not in seen]
-            for s in fresh:
-                seen.add((s.symbol, s.timestamp.isoformat()))
-            print_signals(fresh if fresh else sigs)
             if fresh:
-                print(f"\a[MA200起漲提示] 偵測到 {len(fresh)} 筆新起漲訊號！")
+                for s in fresh:
+                    seen.add((s.symbol, s.timestamp.isoformat()))
+                save_seen_state(seen_path, seen)
+                print_signals(fresh)
+                print(f"\a[MA200起漲提示] 偵測到 {len(fresh)} 筆新已收盤起漲訊號！")
+            else:
+                print(f"本輪無新增已收盤起漲訊號（視窗內 {len(sigs)} 筆既有訊號已通知過）。")
         else:
             print_signals(sigs)
         if args.plot and sigs:

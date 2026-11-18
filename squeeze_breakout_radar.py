@@ -18,8 +18,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 import json
+import logging
+import os
 from pathlib import Path
 import sys
+import threading
 import time
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from zoneinfo import ZoneInfo
@@ -32,10 +35,19 @@ import numpy as np
 import pandas as pd
 import requests
 
+logger = logging.getLogger("squeeze_breakout_radar")
+if not logger.handlers:
+    _handler = logging.StreamHandler(sys.stderr)
+    _handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.WARNING)
+
 TPE = ZoneInfo("Asia/Taipei")
 BINANCE_FAPI = "https://fapi.binance.com"
 HTTP = requests.Session()
 HTTP.headers.update({"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+_RATE_LOCK = threading.Lock()
+_COOLDOWN_UNTIL = 0.0
 
 INTERVAL_MS = {
     "5m": 300_000,
@@ -82,19 +94,46 @@ class RadarHit:
     funding_rate_pct: Optional[float] = None
 
 
-def api_get(path: str, params: Optional[Dict[str, Any]] = None, retries: int = 3) -> Any:
+def api_get(path: str, params: Optional[Dict[str, Any]] = None, retries: int = 4) -> Any:
+    global _COOLDOWN_UNTIL
     last_err: Optional[Exception] = None
     for attempt in range(retries):
+        wait_cd = 0.0
+        with _RATE_LOCK:
+            now_m = time.monotonic()
+            if _COOLDOWN_UNTIL > now_m:
+                wait_cd = _COOLDOWN_UNTIL - now_m
+        if wait_cd > 0:
+            time.sleep(wait_cd)
         try:
             resp = HTTP.get(BINANCE_FAPI + path, params=params, timeout=15)
+            used_w = resp.headers.get("X-MBX-USED-WEIGHT-1M")
+            if used_w and used_w.isdigit() and int(used_w) >= 1950:
+                with _RATE_LOCK:
+                    _COOLDOWN_UNTIL = max(_COOLDOWN_UNTIL, time.monotonic() + 10.0)
             if resp.status_code in (418, 429):
-                time.sleep(1.2 * (attempt + 1))
+                retry_hdr = resp.headers.get("Retry-After")
+                wait_s = float(retry_hdr) if (retry_hdr and retry_hdr.isdigit()) else 2.0 * (2 ** attempt)
+                with _RATE_LOCK:
+                    _COOLDOWN_UNTIL = max(_COOLDOWN_UNTIL, time.monotonic() + wait_s)
+                logger.warning(
+                    "Binance API 觸發限流 (HTTP %s, %s)，等待 %.1fs 後重試 (%d/%d)",
+                    resp.status_code,
+                    path,
+                    wait_s,
+                    attempt + 1,
+                    retries,
+                )
+                time.sleep(wait_s)
                 continue
             resp.raise_for_status()
             return resp.json()
         except Exception as exc:
             last_err = exc
-            time.sleep(0.35 * (attempt + 1))
+            wait_s = 0.5 * (2 ** attempt)
+            if attempt + 1 < retries:
+                logger.warning("Binance API 請求失敗 (%s): %s，%.1fs 後重試 (%d/%d)", path, exc, wait_s, attempt + 1, retries)
+                time.sleep(wait_s)
     raise RuntimeError(f"Binance API failed ({path}): {last_err}")
 
 
@@ -161,9 +200,23 @@ def compute_radar_indicators(df: pd.DataFrame, interval: str = "15m") -> pd.Data
     return df
 
 
-def load_klines_with_orderflow(symbol: str, interval: str = "15m", limit: int = 560) -> pd.DataFrame:
-    raw = api_get("/fapi/v1/klines", {"symbol": symbol, "interval": interval, "limit": min(1500, limit)})
-    if not raw or len(raw) < 260:
+def load_klines_with_orderflow(
+    symbol: str,
+    interval: str = "15m",
+    limit: int = 560,
+    drop_forming: bool = True,
+) -> pd.DataFrame:
+    bar_ms = INTERVAL_MS.get(interval, 900_000)
+    req_limit = min(1500, limit + (1 if drop_forming else 0))
+    raw = api_get("/fapi/v1/klines", {"symbol": symbol, "interval": interval, "limit": req_limit})
+    if not raw:
+        return pd.DataFrame()
+
+    now_ms = int(time.time() * 1000)
+    while drop_forming and raw and int(raw[-1][0]) + bar_ms > now_ms:
+        raw = raw[:-1]
+
+    if len(raw) < 260:
         return pd.DataFrame()
 
     df = pd.DataFrame(
@@ -358,14 +411,14 @@ def attach_oi_and_funding(hits: Sequence[RadarHit]) -> None:
                     p1 = float(oi[-1]["sumOpenInterest"])
                     if p0 > 0:
                         oi_chg = (p1 - p0) / p0 * 100.0
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("無法取得 %s 未平倉量 (OI): %s", hit.symbol, exc)
             try:
                 pm = api_get("/fapi/v1/premiumIndex", {"symbol": hit.symbol})
                 if isinstance(pm, dict) and pm.get("lastFundingRate") is not None:
                     fr_pct = float(pm["lastFundingRate"]) * 100.0
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("無法取得 %s 即時資金費率: %s", hit.symbol, exc)
             cache[hit.symbol] = (oi_chg, fr_pct)
 
         hit.oi_change_pct, hit.funding_rate_pct = cache[hit.symbol]
@@ -485,6 +538,29 @@ def render_radar_chart(
     plt.close(fig)
 
 
+def load_seen_state(path: Path) -> Set[Tuple[str, str]]:
+    if not path.is_file():
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return {(str(item[0]), str(item[1])) for item in data if isinstance(item, (list, tuple)) and len(item) >= 2}
+    except Exception as exc:
+        logger.warning("讀取盯盤已通知紀錄失敗 (%s): %s", path, exc)
+    return set()
+
+
+def save_seen_state(path: Path, seen: Set[Tuple[str, str]], max_items: int = 5000) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        ordered = sorted(seen, key=lambda kv: (kv[1], kv[0]))[-max_items:]
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        tmp_path.write_text(json.dumps(ordered, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp_path, path)
+    except Exception as exc:
+        logger.warning("寫入盯盤已通知紀錄失敗 (%s): %s", path, exc)
+
+
 def run_radar(
     symbols: Sequence[str],
     interval: str = "15m",
@@ -493,12 +569,13 @@ def run_radar(
     limit: int = 560,
     sniper_only: bool = True,
     plot_dir: Optional[Path] = None,
+    drop_forming: bool = True,
 ) -> List[RadarHit]:
     hits: List[RadarHit] = []
 
     def _scan_one(sym: str) -> List[RadarHit]:
         try:
-            df = load_klines_with_orderflow(sym, interval=interval, limit=limit)
+            df = load_klines_with_orderflow(sym, interval=interval, limit=limit, drop_forming=drop_forming)
             res = scan_squeeze_breakouts(df, sym, interval=interval, sniper_only=sniper_only)
             if not res:
                 return []
@@ -508,7 +585,8 @@ def run_radar(
             if res and plot_dir is not None:
                 render_radar_chart(df, res, sym, interval, plot_dir / f"{sym}_{interval}_squeeze_radar.png")
             return res
-        except Exception:
+        except Exception as exc:
+            logger.warning("掃描 %s (%s) 失敗: %s", sym, interval, exc)
             return []
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -564,11 +642,14 @@ def main() -> int:
     parser.add_argument("--max-symbols", type=int, default=260, help="最多掃描幣種數，預設 260")
     parser.add_argument("--recent-bars", type=int, default=10, help="掃描模式顯示最近 N 根內的新起漲訊號")
     parser.add_argument("--plot", action="store_true", help="輸出深色主題三合一雷達圖 PNG")
+    parser.add_argument("--include-forming", action="store_true", help="納入尚未收盤的當根 K 線（預設僅掃描已收盤 K 線避免重繪）")
+    parser.add_argument("--seen-file", type=str, default="", help="--watch 已推播訊號持久化檔案路徑")
     parser.add_argument("--out-dir", type=str, default="breakout_output", help="圖表輸出資料夾")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
     sniper_only = not args.relaxed
+    drop_forming = not args.include_forming
 
     if args.symbols:
         syms = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
@@ -580,6 +661,7 @@ def main() -> int:
             limit=args.limit,
             sniper_only=sniper_only,
             plot_dir=out_dir if args.plot else None,
+            drop_forming=drop_forming,
         )
         print_hits(hits)
         if args.plot and hits:
@@ -589,12 +671,13 @@ def main() -> int:
     if not args.scan and args.watch <= 0:
         args.scan = True
 
-    seen: Set[Tuple[str, str]] = set()
+    seen_path = Path(args.seen_file) if args.seen_file else (out_dir / ".watch_seen_squeeze.json")
+    seen: Set[Tuple[str, str]] = load_seen_state(seen_path) if args.watch > 0 else set()
     while True:
         now_str = datetime.now(TPE).strftime("%Y-%m-%d %H:%M:%S")
         syms = list_usdt_perps(min_quote_vol_usd=args.min_vol, max_symbols=args.max_symbols)
         mode_tag = "雙模狙擊實戰版" if sniper_only else "寬鬆預警版"
-        print(f"\n[{now_str} TPE] 雷達掃描 {len(syms)} 檔 USDT 永續合約 ({args.interval} | {mode_tag})...")
+        print(f"\n[{now_str} TPE] 雷達掃描 {len(syms)} 檔 USDT 永續合約 ({args.interval} | {mode_tag} | 已收盤K={drop_forming})...")
         hits = run_radar(
             syms,
             interval=args.interval,
@@ -602,6 +685,7 @@ def main() -> int:
             limit=args.limit,
             sniper_only=sniper_only,
             plot_dir=out_dir if args.plot else None,
+            drop_forming=drop_forming,
         )
 
         if args.watch > 0:
@@ -611,9 +695,12 @@ def main() -> int:
                 if key not in seen:
                     seen.add(key)
                     fresh.append(h)
-            print_hits(fresh if fresh else hits)
             if fresh:
+                save_seen_state(seen_path, seen)
+                print_hits(fresh)
                 print(f"\a[起漲雷達] 剛偵測到 {len(fresh)} 筆新狙擊起漲訊號！")
+            else:
+                print(f"本輪無新增已收盤起漲訊號（視窗內 {len(hits)} 筆既有訊號已通知過）。")
         else:
             print_hits(hits)
 

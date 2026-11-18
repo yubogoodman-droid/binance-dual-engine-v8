@@ -329,10 +329,22 @@ const BLACKLIST = new Set([
 ]);
 const IV_MS = { "5m": 300000, "15m": 900000, "30m": 1800000, "1h": 3600000 };
 
+const SEEN_STORAGE_KEY = "radar_watch_seen_v1";
 let watchTimer = null;
 let watchCountdown = 0;
 let seenKeys = new Set();
+try {
+  const savedSeen = JSON.parse(localStorage.getItem(SEEN_STORAGE_KEY) || "[]");
+  if (Array.isArray(savedSeen)) seenKeys = new Set(savedSeen);
+} catch (e) {}
 let isScanning = false;
+
+function persistSeenKeys() {
+  try {
+    const arr = Array.from(seenKeys).slice(-5000);
+    localStorage.setItem(SEEN_STORAGE_KEY, JSON.stringify(arr));
+  } catch (e) {}
+}
 
 function switchTab(name) {
   document.getElementById("viewRadar").classList.toggle("hidden", name !== "radar");
@@ -390,8 +402,14 @@ function rollingMean(arr, win, minP) {
   return out;
 }
 
-function analyzeSymbol(raw, symbol, interval, preset, recentBars) {
-  if (!Array.isArray(raw) || raw.length < 260) return [];
+function analyzeSymbol(raw, symbol, interval, preset, recentBars, dropForming = true) {
+  if (!Array.isArray(raw)) return [];
+  const barMs = IV_MS[interval] || 900000;
+  const nowMs = Date.now();
+  while (dropForming && raw.length && Number(raw[raw.length - 1][0]) + barMs > nowMs) {
+    raw = raw.slice(0, -1);
+  }
+  if (raw.length < 260) return [];
   const n = raw.length;
   const ts = raw.map(x => Number(x[0]));
   const o = raw.map(x => parseFloat(x[1]));
@@ -701,10 +719,14 @@ function renderHits(hits) {
     return;
   }
   area.innerHTML = "";
+  let seenUpdated = false;
   hits.forEach((h, i) => {
     const key = `${h.symbol}_${h.timeMs}`;
     const isFresh = !seenKeys.has(key);
-    seenKeys.add(key);
+    if (isFresh) {
+      seenKeys.add(key);
+      seenUpdated = true;
+    }
 
     const oiTxt = h.oiChg !== undefined ? `${h.oiChg >= 0 ? "+" : ""}${h.oiChg.toFixed(1)}%` : "N/A";
     const oiCls = h.oiChg !== undefined ? (h.oiChg >= 0 ? "pos" : "neg") : "";
@@ -739,10 +761,11 @@ function renderHits(hits) {
     area.appendChild(card);
     drawMiniChart(document.getElementById(`chart_${i}`), h.chartData);
   });
+  if (seenUpdated) persistSeenKeys();
 }
 
 function copySetup(sym, entry, stop) {
-  const txt = `${sym} v2雙模起漲｜進場參考: ${entry}｜初始止損: ${stop} (+0.6R移保本, 破BB中軌止盈)`;
+  const txt = `${sym} v2雙模起漲｜進場參考: ${entry}｜初始止損: ${stop} (+0.55R移保本, 破BB中軌止盈)`;
   if (navigator.clipboard) navigator.clipboard.writeText(txt).catch(() => {});
   alert("已複製：\n" + txt);
 }

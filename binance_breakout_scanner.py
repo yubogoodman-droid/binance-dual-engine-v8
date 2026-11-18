@@ -15,13 +15,17 @@ v2 實盤回測優化重點：
 from __future__ import annotations
 
 import argparse
+import json
+import logging
+import os
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from zoneinfo import ZoneInfo
 
 import matplotlib
@@ -32,12 +36,21 @@ import numpy as np
 import pandas as pd
 import requests
 
+logger = logging.getLogger("binance_breakout_scanner")
+if not logger.handlers:
+    _handler = logging.StreamHandler(sys.stderr)
+    _handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.WARNING)
+
 TPE = ZoneInfo("Asia/Taipei")
-BASE = "https://www.binance.com"
+BASE = "https://fapi.binance.com"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": UA, "Accept": "application/json"})
+_RATE_LOCK = threading.Lock()
+_COOLDOWN_UNTIL = 0.0
 
 EXCLUDED_SYMBOLS = frozenset({
     "SQQQUSDT",
@@ -129,18 +142,45 @@ class BreakoutSignal:
 
 
 def get_json(path: str, params: Optional[Dict[str, Any]] = None, retries: int = 4) -> Any:
+    global _COOLDOWN_UNTIL
     last_err = None
     for i in range(retries):
+        wait_cd = 0.0
+        with _RATE_LOCK:
+            now_m = time.monotonic()
+            if _COOLDOWN_UNTIL > now_m:
+                wait_cd = _COOLDOWN_UNTIL - now_m
+        if wait_cd > 0:
+            time.sleep(wait_cd)
         try:
             r = SESSION.get(BASE + path, params=params, timeout=20)
+            used_w = r.headers.get("X-MBX-USED-WEIGHT-1M")
+            if used_w and used_w.isdigit() and int(used_w) >= 1950:
+                with _RATE_LOCK:
+                    _COOLDOWN_UNTIL = max(_COOLDOWN_UNTIL, time.monotonic() + 10.0)
             if r.status_code in (418, 429):
-                time.sleep(1.5 * (i + 1))
+                retry_hdr = r.headers.get("Retry-After")
+                wait_s = float(retry_hdr) if (retry_hdr and retry_hdr.isdigit()) else 2.0 * (2 ** i)
+                with _RATE_LOCK:
+                    _COOLDOWN_UNTIL = max(_COOLDOWN_UNTIL, time.monotonic() + wait_s)
+                logger.warning(
+                    "Binance API 觸發限流 (HTTP %s, %s)，等待 %.1fs 後重試 (%d/%d)",
+                    r.status_code,
+                    path,
+                    wait_s,
+                    i + 1,
+                    retries,
+                )
+                time.sleep(wait_s)
                 continue
             r.raise_for_status()
             return r.json()
         except Exception as exc:
             last_err = exc
-            time.sleep(0.4 * (i + 1))
+            wait_s = 0.5 * (2 ** i)
+            if i + 1 < retries:
+                logger.warning("Binance API 請求失敗 (%s): %s，%.1fs 後重試 (%d/%d)", path, exc, wait_s, i + 1, retries)
+                time.sleep(wait_s)
     raise RuntimeError(f"API request failed ({path}): {last_err}")
 
 
@@ -173,11 +213,11 @@ def fetch_top_usdt_perps(top_n: int = 80, min_quote_vol: float = 10_000_000, inc
     return [sym for _, sym in ranked[:top_n]]
 
 
-def fetch_klines(symbol: str, interval: str = "15m", days: int = 5, drop_forming: bool = False) -> pd.DataFrame:
-    """拉取幣安永續合約 K 線並計算 MA7~MA200 與量能指標。"""
+def fetch_klines(symbol: str, interval: str = "15m", days: int = 5, drop_forming: bool = True) -> pd.DataFrame:
+    """拉取幣安永續合約 K 線並計算 MA7~MA200 與量能指標（預設剔除未收盤當根 K 線避免重繪）。"""
     bar_ms = INTERVAL_MS.get(interval, 900_000)
     bars_per_day = max(1, int(86_400_000 // bar_ms))
-    need = min(1500, max(250, days * bars_per_day + 200))
+    need = min(1500, max(250, days * bars_per_day + 200 + (1 if drop_forming else 0)))
 
     raw = get_json(
         "/fapi/v1/klines",
@@ -187,8 +227,10 @@ def fetch_klines(symbol: str, interval: str = "15m", days: int = 5, drop_forming
         return pd.DataFrame()
 
     now_ms = int(time.time() * 1000)
-    if drop_forming and int(raw[-1][0]) + bar_ms > now_ms:
+    while drop_forming and raw and int(raw[-1][0]) + bar_ms > now_ms:
         raw = raw[:-1]
+    if not raw:
+        return pd.DataFrame()
 
     df = pd.DataFrame(
         {
@@ -855,19 +897,43 @@ def plot_symbol_signals(
     plt.close(fig)
 
 
+def load_seen_state(path: Path) -> Set[Tuple[str, str]]:
+    if not path.is_file():
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return {(str(item[0]), str(item[1])) for item in data if isinstance(item, (list, tuple)) and len(item) >= 2}
+    except Exception as exc:
+        logger.warning("讀取盯盤已通知紀錄失敗 (%s): %s", path, exc)
+    return set()
+
+
+def save_seen_state(path: Path, seen: Set[Tuple[str, str]], max_items: int = 5000) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        ordered = sorted(seen, key=lambda kv: (kv[1], kv[0]))[-max_items:]
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        tmp_path.write_text(json.dumps(ordered, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp_path, path)
+    except Exception as exc:
+        logger.warning("寫入盯盤已通知紀錄失敗 (%s): %s", path, exc)
+
+
 def scan_market_once(
     symbols: Sequence[str],
     interval: str = "15m",
     recent_bars: int = 8,
     workers: int = 8,
     plot_dir: Optional[Path] = None,
+    drop_forming: bool = True,
 ) -> List[BreakoutSignal]:
-    """平行掃描多檔幣種，回傳在最近 recent_bars 根 K 線內觸發的起漲訊號。"""
+    """平行掃描多檔幣種，回傳在最近 recent_bars 根已收盤 K 線內觸發的起漲訊號。"""
     found: List[BreakoutSignal] = []
 
     def _worker(sym: str) -> List[BreakoutSignal]:
         try:
-            df = fetch_klines(sym, interval=interval, days=5, drop_forming=False)
+            df = fetch_klines(sym, interval=interval, days=5, drop_forming=drop_forming)
             sigs = detect_signals(df, sym, interval) + detect_coiled_ma200_signals(df, sym, interval)
             if not sigs:
                 return []
@@ -877,7 +943,8 @@ def scan_market_once(
             if sigs and plot_dir is not None:
                 plot_symbol_signals(df, sigs, sym, interval, plot_dir / f"{sym}_{interval}.png")
             return sigs
-        except Exception:
+        except Exception as exc:
+            logger.warning("掃描 %s (%s) 失敗: %s", sym, interval, exc)
             return []
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -924,7 +991,7 @@ def main() -> int:
     except Exception:
         pass
     parser = argparse.ArgumentParser(description="幣安永續合約起漲點偵測與即時監控腳本 v2")
-    parser.add_argument("--symbols", type=str, default="AKEUSDT", help="指定幣種，逗號分隔 (例如 AKEUSDT,BTCUSDT)")
+    parser.add_argument("--symbols", type=str, default="", help="指定幣種，逗號分隔 (例如 BTCUSDT,ETHUSDT)")
     parser.add_argument("--interval", type=str, default="15m", help="K線週期 (5m, 15m, 1h)，預設 15m")
     parser.add_argument("--days", type=int, default=5, help="回溯天數，預設 5 天")
     parser.add_argument("--scan", action="store_true", help="掃描全市場熱門 USDT 永續合約")
@@ -932,42 +999,62 @@ def main() -> int:
     parser.add_argument("--top", type=int, default=80, help="全市場掃描的 24h 成交額前 N 名幣種數，預設 80")
     parser.add_argument("--recent-bars", type=int, default=12, help="--scan 模式下只顯示最近 N 根 K 線內的起漲點")
     parser.add_argument("--plot", action="store_true", help="是否輸出標記好起漲點的 K 線圖 PNG")
+    parser.add_argument("--include-forming", action="store_true", help="納入尚未收盤的當根 K 線（預設僅掃描已收盤 K 線避免重繪）")
+    parser.add_argument("--seen-file", type=str, default="", help="--watch 已推播訊號持久化檔案路徑")
     parser.add_argument("--out-dir", type=str, default="breakout_output", help="圖表輸出資料夾")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
+    drop_forming = not args.include_forming
 
-    if args.scan or args.watch > 0:
-        while True:
-            now_str = datetime.now(TPE).strftime("%Y-%m-%d %H:%M:%S")
-            print(f"\n[{now_str} TPE] 正在掃描幣安前 {args.top} 大熱門 USDT 永續合約 ({args.interval}) 起漲點...")
-            syms = fetch_top_usdt_perps(top_n=args.top)
-            sigs = scan_market_once(
-                syms,
-                interval=args.interval,
-                recent_bars=args.recent_bars,
-                plot_dir=out_dir if args.plot else None,
-            )
-            print_signals_table(sigs)
-            if args.plot and sigs:
-                print(f"已將觸發訊號的 K 線圖存至: {out_dir.resolve()}")
-            if args.watch <= 0:
-                break
-            time.sleep(args.watch)
+    if args.symbols and not args.scan and args.watch <= 0:
+        symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+        all_signals: List[BreakoutSignal] = []
+        for sym in symbols:
+            df = fetch_klines(sym, interval=args.interval, days=args.days, drop_forming=drop_forming)
+            sigs = detect_signals(df, sym, args.interval) + detect_coiled_ma200_signals(df, sym, args.interval)
+            all_signals.extend(sigs)
+            if args.plot:
+                img_path = out_dir / f"{sym}_{args.interval}.png"
+                plot_symbol_signals(df, sigs, sym, args.interval, img_path)
+                print(f"[圖表已產生] {img_path.resolve()}")
+
+        print_signals_table(all_signals)
         return 0
 
-    symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
-    all_signals: List[BreakoutSignal] = []
-    for sym in symbols:
-        df = fetch_klines(sym, interval=args.interval, days=args.days, drop_forming=False)
-        sigs = detect_signals(df, sym, args.interval)
-        all_signals.extend(sigs)
-        if args.plot:
-            img_path = out_dir / f"{sym}_{args.interval}.png"
-            plot_symbol_signals(df, sigs, sym, args.interval, img_path)
-            print(f"[圖表已產生] {img_path.resolve()}")
-
-    print_signals_table(all_signals)
+    seen_path = Path(args.seen_file) if args.seen_file else (out_dir / ".watch_seen_breakout.json")
+    seen: Set[Tuple[str, str]] = load_seen_state(seen_path) if args.watch > 0 else set()
+    while True:
+        now_str = datetime.now(TPE).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"\n[{now_str} TPE] 正在掃描幣安前 {args.top} 大熱門 USDT 永續合約 ({args.interval} | 已收盤K={drop_forming}) 起漲點...")
+        syms = fetch_top_usdt_perps(top_n=args.top)
+        sigs = scan_market_once(
+            syms,
+            interval=args.interval,
+            recent_bars=args.recent_bars,
+            plot_dir=out_dir if args.plot else None,
+            drop_forming=drop_forming,
+        )
+        if args.watch > 0:
+            fresh: List[BreakoutSignal] = []
+            for s in sigs:
+                key = (s.symbol, s.timestamp.isoformat())
+                if key not in seen:
+                    seen.add(key)
+                    fresh.append(s)
+            if fresh:
+                save_seen_state(seen_path, seen)
+                print_signals_table(fresh)
+                print(f"\a[雙引擎起漲提示] 偵測到 {len(fresh)} 筆新已收盤起漲訊號！")
+            else:
+                print(f"本輪無新增已收盤起漲訊號（視窗內 {len(sigs)} 筆既有訊號已通知過）。")
+        else:
+            print_signals_table(sigs)
+        if args.plot and sigs:
+            print(f"已將觸發訊號的 K 線圖存至: {out_dir.resolve()}")
+        if args.watch <= 0:
+            break
+        time.sleep(args.watch)
     return 0
 
 

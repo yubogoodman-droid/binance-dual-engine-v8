@@ -3,6 +3,9 @@ __pycache__/
 *$py.class
 *.pkl
 *.npz
+*.watch_seen*.json
+.watch_seen*.json
+breakout_output/cache_*/
 .DS_Store
 .env
 pofanfan_1h_ma25/
